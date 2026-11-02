@@ -31,9 +31,9 @@ export function CompressionSettings({ options: o, onChange, locked, hardware }: 
     <fieldset disabled={locked} className="settings-fieldset"><legend className="sr-only">视频压缩参数</legend>
       <div className="quality-strategy">
         <label className="form-label">编码方案<select aria-label="编码方案" value={o.strategy} onChange={e => strategy(e.target.value as Options['strategy'])}>
-          <option value="efficient">精细压缩 · CPU</option><option value="maruko">小丸经典参考 · x264</option><option value="standard">快速分享 · 显卡优先</option>
+          <option value="efficient">精细压缩 · CPU</option><option value="maruko">小丸经典参考 · x264</option><option value="standard">快速 / 兼容转码 · 显卡优先</option>
         </select></label>
-        <p className="field-hint">{o.strategy === 'efficient' ? '用更多编码时间换取压缩效率；默认保留原始分辨率。' : o.strategy === 'maruko' ? '按公开旧版小丸源码参数配置；固定 H.264、8bit、veryslow。' : '优先处理速度，也可选择 CPU 或混合批量压缩。'}</p>
+        <p className="field-hint">{o.strategy === 'efficient' ? '用更多编码时间换取压缩效率；默认保留原始分辨率。' : o.strategy === 'maruko' ? '按公开旧版小丸源码参数配置；固定 H.264、8bit、veryslow。' : '优先速度与兼容性；默认 H.264，原片为 H.265 时可能更大。'}</p>
         <label className="form-label">素材类型<select aria-label="素材类型" value={o.content} onChange={e => { const content = e.target.value as Options['content']; onChange({ ...o, content, ...(o.strategy === 'efficient' ? recommend(content) : {}) }) }}>
           <option value="general">日常实拍 / 手机视频</option><option value="animation">动漫 / 二次元</option><option value="screen">录屏 / 教程文字</option>
         </select></label>

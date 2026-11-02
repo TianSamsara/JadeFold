@@ -54,3 +54,16 @@ test('cancelling before pass two removes pass one statistics and partial video',
   await assert.rejects(engine.compress(source, { ...options, rateControl: 'size' }, directory, (_value, phase) => { if (phase.startsWith('第二遍')) control.abort(); }, control.signal), /已取消/);
   assert.ok(!(await fs.readdir(directory)).some(name => name.startsWith('.jadefold-')));
 });
+
+test('HEVC to H.264 expansion is reported honestly and the playable output is retained', async () => {
+  const input = path.join(directory, 'compact-hevc.mp4');
+  await engine.run(engine.binaryPaths().ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-t', '3', '-an', '-c:v', 'libx265', '-crf', '38', '-preset', 'fast', '-x265-params', 'pools=2:frame-threads=1', input]);
+  const compact = await engine.inspect(input);
+  assert.equal(compact.codec, 'hevc'); assert.ok(compact.videoBitrate > 0);
+  const result = await engine.compress(compact, { ...options, crf: 18, audio: 'mute' }, directory, () => {}, new AbortController().signal, { cpuThreads: 2 });
+  assert.equal(result.outputCodec, 'h264'); assert.equal(result.outputCodecTag, 'avc1');
+  assert.equal(result.compressionOutcome, 'expanded'); assert.match(result.compressionWarning, /没有减小文件/);
+  assert.ok(result.outputSize > compact.size); assert.ok(result.outputVideoBitrate > compact.videoBitrate);
+  await fs.access(result.output);
+  await engine.run(engine.binaryPaths().ffmpeg, ['-v', 'error', '-i', result.output, '-t', '1', '-an', '-f', 'null', '-']);
+});

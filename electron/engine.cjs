@@ -24,27 +24,31 @@ function run(executable, args, { timeout = 30000, maxBytes = 8 * 1024 * 1024, cw
   });
 }
 
+async function probeMedia(input) {
+  const raw = await run(binaryPaths().ffprobe, ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_format', '-show_streams', '-of', 'json', input]);
+  const data = JSON.parse(raw.toString());
+  const video = data.streams?.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
+  if (!video) throw new Error('此文件没有可压缩的视频画面。');
+  const duration = Number(data.format?.duration || video.duration);
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error('无法识别视频时长，请尝试完整的本地视频。');
+  const audio = data.streams?.find(stream => stream.codec_type === 'audio');
+  const [numerator, denominator] = (video.avg_frame_rate || '0/1').split('/').map(Number);
+  return { duration, width: video.width, height: video.height, videoIndex: video.index, fps: denominator ? numerator / denominator : 0, codec: video.codec_name, codecTag: video.codec_tag_string || '', profile: video.profile || '', videoBitrate: Number(video.bit_rate || 0), totalBitrate: Number(data.format?.bit_rate || 0), pixelFormat: video.pix_fmt, hasAudio: !!audio, audioCodec: audio?.codec_name || '', audioBitrate: Number(audio?.bit_rate || 0) };
+}
+
 async function inspect(input) {
   if (typeof input !== 'string' || !path.isAbsolute(input)) throw new Error('请选择本地视频文件。');
   if (!['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.wmv', '.flv', '.ts', '.mts', '.m2ts'].includes(path.extname(input).toLowerCase())) throw new Error('不支持此文件类型，请添加 MP4、MOV、MKV 等视频文件。');
   const resolved = await fs.realpath(input);
   const stat = await fs.stat(resolved);
   if (!stat.isFile()) throw new Error('请添加视频文件，暂不支持直接导入文件夹。');
-  const tools = binaryPaths();
-  const raw = await run(tools.ffprobe, ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_format', '-show_streams', '-of', 'json', resolved]);
-  const data = JSON.parse(raw.toString());
-  const video = data.streams?.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
-  if (!video) throw new Error('此文件没有可压缩的视频画面。');
-  const duration = Number(data.format?.duration || video.duration);
-  if (!Number.isFinite(duration) || duration <= 0) throw new Error('无法识别视频时长，请尝试完整的本地视频。');
+  const metadata = await probeMedia(resolved);
   let thumbnail = '';
   try {
-    const image = await run(tools.ffmpeg, ['-v', 'error', '-ss', String(Math.min(duration / 4, 2)), '-protocol_whitelist', 'file,pipe', '-i', resolved, '-map', `0:${video.index}`, '-frames:v', '1', '-vf', 'scale=240:135:force_original_aspect_ratio=decrease', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'], { timeout: 15000 });
+    const image = await run(binaryPaths().ffmpeg, ['-v', 'error', '-ss', String(Math.min(metadata.duration / 4, 2)), '-protocol_whitelist', 'file,pipe', '-i', resolved, '-map', `0:${metadata.videoIndex}`, '-frames:v', '1', '-vf', 'scale=240:135:force_original_aspect_ratio=decrease', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'], { timeout: 15000 });
     thumbnail = `data:image/jpeg;base64,${image.toString('base64')}`;
   } catch { /* A failed thumbnail should not prevent compression. */ }
-  const audio = data.streams?.find(stream => stream.codec_type === 'audio');
-  const [numerator, denominator] = (video.avg_frame_rate || '0/1').split('/').map(Number);
-  return { id: randomUUID(), path: resolved, name: path.basename(resolved), size: stat.size, duration, width: video.width, height: video.height, videoIndex: video.index, fps: denominator ? numerator / denominator : 0, codec: video.codec_name, pixelFormat: video.pix_fmt, hasAudio: !!audio, audioCodec: audio?.codec_name || '', audioBitrate: Number(audio?.bit_rate || 0), thumbnail, status: 'queued', progress: 0 };
+  return { id: randomUUID(), path: resolved, name: path.basename(resolved), size: stat.size, ...metadata, thumbnail, status: 'queued', progress: 0 };
 }
 
 function validateOptions(value) {
@@ -209,12 +213,16 @@ async function compress(job, options, directory, onProgress, signal, runtime = {
       });
     }
     if (signal.aborted) throw new Error('已取消');
+    const outputMedia = await probeMedia(temp);
+    if (signal.aborted) throw new Error('已取消');
     const output = await publishOutput(temp, destination, job.name, o.format);
     const stat = await fs.stat(output);
-    return { output, outputSize: stat.size, completedAt: new Date().toISOString(), options: o, encoder: o.encoder, encoderLabel: encoderNames[o.encoder], phaseLabel: '', videoBitrate };
+    const compressionOutcome = stat.size < job.size ? 'reduced' : stat.size > job.size ? 'expanded' : 'unchanged';
+    const compressionWarning = compressionOutcome === 'reduced' ? '' : '本次完成了转码，但没有减小文件。输出已保留；若目标是减小体积，请使用指定体积模式或调整编码器与画质。';
+    return { output, outputSize: stat.size, completedAt: new Date().toISOString(), options: o, encoder: o.encoder, encoderLabel: encoderNames[o.encoder], phaseLabel: '', targetVideoBitrate: videoBitrate, outputCodec: outputMedia.codec, outputCodecTag: outputMedia.codecTag, outputVideoBitrate: outputMedia.videoBitrate, outputTotalBitrate: outputMedia.totalBitrate, compressionOutcome, compressionWarning };
   } finally {
     if (path.dirname(work) === destination && path.basename(work).startsWith('.jadefold-')) await fs.rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-module.exports = { binaryPaths, run, inspect, validateOptions, videoEncoderArgs, targetVideoBitrate, resolveEncoder, detectHardware, encoderNames, buildArgs, parseProgress, publishOutput, compress };
+module.exports = { binaryPaths, run, inspect, probeMedia, validateOptions, videoEncoderArgs, targetVideoBitrate, resolveEncoder, detectHardware, encoderNames, buildArgs, parseProgress, publishOutput, compress };
