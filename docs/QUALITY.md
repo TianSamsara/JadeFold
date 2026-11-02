@@ -21,14 +21,16 @@
 
 两方案都使用相同 0.12 MB 总体积目标及两遍编码。小丸参考用 libx264 veryslow；x265 方案用 10bit slow，边缘样本使用 animation 调优。VMAF 使用默认模型，SSIM 取帧平均；测量前统一为 8bit 420 以适配模型。耗时只包含编码，不包含质量测量。
 
+**v0.6.0 修正：旧报告的 MKV / MP4 时间基准舍入可能让相邻帧互相比较，原 VMAF / SSIM 数字撤回，不应用于画质结论。** 当前按帧序号建立相同时间线，检查每条评分日志和参考/输出帧数一致，并增加 FFV1 → x264 无损校验（VMAF > 99.5、SSIM > 0.99999）。以下为修正后重新运行的数据；编码字节数未变，耗时受本机状态影响。
+
 | 合成样本 | 编码方案 | 输出字节 | VMAF | SSIM | 编码秒数 |
 | --- | --- | ---: | ---: | ---: | ---: |
-| general-stress | classic-reference | 120,360 | 73.615 | 0.923552 | 1.51 |
-| general-stress | h265-10bit | 123,621 | 74.107 | 0.922943 | 3.07 |
-| animation-edges | classic-reference | 124,664 | 72.455 | 0.976752 | 0.61 |
-| animation-edges | h265-10bit | 123,007 | 71.423 | 0.974041 | 2.48 |
-| screen-text | classic-reference | 36,282 | 96.625 | 0.999752 | 0.40 |
-| screen-text | h265-10bit | 38,145 | 96.346 | 0.999621 | 1.63 |
+| general-stress | classic-reference | 120,360 | 94.672 | 0.946405 | 0.73 |
+| general-stress | h265-10bit | 123,621 | 95.499 | 0.946044 | 1.87 |
+| animation-edges | classic-reference | 124,664 | 93.879 | 0.993416 | 0.39 |
+| animation-edges | h265-10bit | 123,007 | 92.789 | 0.990328 | 1.43 |
+| screen-text | classic-reference | 36,282 | 97.400 | 0.999976 | 0.22 |
+| screen-text | h265-10bit | 38,145 | 97.122 | 0.999847 | 0.82 |
 
 这些数据不能证明已超过原版小丸：没有运行原小丸二进制，测试素材也不是实拍、动画成片或真实录屏。它们验证的是参数实现、码率预算与质量测量链条。两方案在不同指标和样本上各有胜负；x265 10bit 不会在每个片源都更优。屏幕样本过于简单，两种方案均远低于体积上限，不能当作严格同实际码率比较。
 
@@ -37,3 +39,11 @@
 运行 `pnpm benchmark -- "D:/videos/input.mp4"` 可对自己的素材前 6 秒生成相同流程的 JSON 报告，结果保存在 `.test-artifacts/benchmark/`。默认不传参数则运行以上合成样本。源文件不上传。
 
 编码文档：[FFmpeg libx264 / libx265](https://ffmpeg.org/ffmpeg-codecs.html)、[x265 码率控制](https://x265.readthedocs.io/en/master/cli.html#quality-rate-control-and-rate-distortion-options)。AV1 等更现代编码也值得单独评估，但本版本未以它们作成熟质量承诺。
+
+## 智能均衡的判定边界
+
+本版本使用 VMAF 93 / 低分位帧 VMAF 85 / SSIM 0.97（录屏 0.985）作为产品筛选门槛。这不是行业统一的“肉眼无损”标准。只在已测试、通过所有抽样门槛且预计缩小至少 10% 的候选中选参，不穷举所有编码器、CRF 或预设。
+
+完整编码另设体积保护：实际缩小不足 5% 就清理本次临时编码结果，不发布成品。手动模式仍允许用户选择兼容转码或指定体积，因此可能生成更大的文件，并明确显示结果。智能模式的抽样和完整编码均使用 CPU slow、相同素材调优和原分辨率；音轨复制计入体积估计。10bit 源仅在 H.265 方案下保留，不承诺默认 SDR 指标能衡量全部色深细节。
+
+质量模型按 [FFmpeg libvmaf](https://ffmpeg.org/ffmpeg-filters.html#libvmaf) 运行。多点采样不能覆盖整片所有镜头；VMAF 与 SSIM 也不能代替检查文字、色带、暗部和运动。自动判断“不建议再压”是有效结果。

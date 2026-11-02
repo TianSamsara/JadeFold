@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react'
 import { Settings2, Info, Clapperboard, SlidersHorizontal, ArrowDownToLine } from 'lucide-react'
 import type { Options, Encoder, Hardware } from './types'
 
-export const defaultOptions: Options = { codec: 'h265', format: 'mp4', resolution: 'original', crf: 24, speed: 'slow', audio: 'keep', encoder: 'cpu', parallel: false, strategy: 'efficient', content: 'general', rateControl: 'quality', targetMB: 50, bitDepth: '10', audioKbps: 160 }
+export const defaultOptions: Options = { codec: 'h265', format: 'mp4', resolution: 'original', crf: 24, speed: 'slow', audio: 'keep', encoder: 'cpu', parallel: false, strategy: 'smart', content: 'general', rateControl: 'quality', targetMB: 50, bitDepth: '10', audioKbps: 160, smartCodec: 'preserve' }
 
 const encoders: { id: Encoder; label: string }[] = [{ id: 'nvenc', label: 'NVIDIA NVENC' }, { id: 'qsv', label: 'Intel Quick Sync' }, { id: 'amf', label: 'AMD AMF' }]
 function recommend(content: Options['content']): Partial<Options> {
@@ -22,7 +22,8 @@ export function CompressionSettings({ options: o, onChange, locked, hardware }: 
   const values = o.strategy === 'standard' ? [21, 26, 31] : [20, 24, 28]
   const presets = [{ name: '画质优先', desc: '保留更多画面细节', icon: Clapperboard }, { name: '均衡压缩', desc: '兼顾清晰度与文件大小', icon: SlidersHorizontal }, { name: '体积优先', desc: '方便传输与日常分享', icon: ArrowDownToLine }]
   function strategy(value: Options['strategy']) {
-    if (value === 'standard') onChange({ ...o, strategy: value, encoder: 'auto', codec: 'h264', bitDepth: '8', speed: 'medium', crf: 26, rateControl: 'quality', parallel: false })
+    if (value === 'smart') onChange({ ...o, strategy: value, encoder: 'cpu', parallel: false, rateControl: 'quality' })
+    else if (value === 'standard') onChange({ ...o, strategy: value, encoder: 'auto', codec: 'h264', bitDepth: '8', speed: 'medium', crf: 26, rateControl: 'quality', parallel: false })
     else if (value === 'maruko') onChange({ ...o, strategy: value, encoder: 'cpu', codec: 'h264', bitDepth: '8', speed: 'veryslow', crf: 23.5, parallel: false })
     else onChange({ ...o, ...recommend(o.content), strategy: value, encoder: 'cpu', speed: 'slow', parallel: false })
   }
@@ -31,15 +32,22 @@ export function CompressionSettings({ options: o, onChange, locked, hardware }: 
     <fieldset disabled={locked} className="settings-fieldset"><legend className="sr-only">视频压缩参数</legend>
       <div className="quality-strategy">
         <label className="form-label">编码方案<select aria-label="编码方案" value={o.strategy} onChange={e => strategy(e.target.value as Options['strategy'])}>
-          <option value="efficient">精细压缩 · CPU</option><option value="maruko">小丸经典参考 · x264</option><option value="standard">快速 / 兼容转码 · 显卡优先</option>
+          <option value="smart">智能均衡 · 自动试压选参</option><option value="efficient">精细压缩 · CPU</option><option value="maruko">小丸经典参考 · x264</option><option value="standard">快速 / 兼容转码 · 显卡优先</option>
         </select></label>
-        <p className="field-hint">{o.strategy === 'efficient' ? '用更多编码时间换取压缩效率；默认保留原始分辨率。' : o.strategy === 'maruko' ? '按公开旧版小丸源码参数配置；固定 H.264、8bit、veryslow。' : '优先速度与兼容性；默认 H.264，原片为 H.265 时可能更大。'}</p>
+        <p className="field-hint">{o.strategy === 'smart' ? '读取原片编码和码率，用短片试压评分，再决定参数或保留原片。' : o.strategy === 'efficient' ? '用更多编码时间换取压缩效率；默认保留原始分辨率。' : o.strategy === 'maruko' ? '按公开旧版小丸源码参数配置；固定 H.264、8bit、veryslow。' : '优先速度与兼容性；默认 H.264，原片为 H.265 时可能更大。'}</p>
         <label className="form-label">素材类型<select aria-label="素材类型" value={o.content} onChange={e => { const content = e.target.value as Options['content']; onChange({ ...o, content, ...(o.strategy === 'efficient' ? recommend(content) : {}) }) }}>
           <option value="general">日常实拍 / 手机视频</option><option value="animation">动漫 / 二次元</option><option value="screen">录屏 / 教程文字</option>
         </select></label>
         <p className="field-hint">{o.content === 'screen' ? '精细方案优先原分辨率和低 CRF，避免小字模糊。' : o.content === 'animation' ? 'CPU 精细方案使用 animation 调优；小丸参考保留原参数。' : '保留原画面细节，不自动降帧或降噪。'}</p>
       </div>
 
+      {o.strategy === 'smart' ? <div className="smart-settings">
+        <label className="form-label">编码兼容性<select aria-label="智能编码兼容性" value={o.smartCodec} onChange={e => patch('smartCodec', e.target.value as Options['smartCodec'])}><option value="preserve">H.264 / H.265 保持原类别 · 推荐</option><option value="hevc">允许升级 H.265 · 需 HEVC 播放器</option></select></label>
+        <label className="form-label spaced-field">输出格式<select aria-label="输出格式" value={o.format} onChange={e => patch('format', e.target.value as Options['format'])}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></label>
+        <div className="smart-rule"><strong>先看画质，再看体积</strong><p>短视频取一段，长视频取三段；使用 CPU 试压，保持原分辨率和帧率，复制原音轨。</p><p>抽样 VMAF ≥ 93，SSIM ≥ 0.97；录屏文字使用更严格的 SSIM 门槛。</p></div>
+        <div className="smart-rule"><strong>不生成越压越大的成品</strong><p>预计至少缩小 10% 才完整编码；完整结果实际缩小不足 5%，就保留原片。</p></div>
+        <p className="field-hint">智能分析比直接转码耗时。评分是抽样估计，不代表整片视觉无损或全局最优；无法安全选参时会跳过。</p>
+      </div> : <>
       <div className="acceleration-setting"><label className="form-label">加速方式<select aria-label="加速方式" value={o.encoder} disabled={hardware.detecting || fixedCPU} onChange={e => onChange({ ...o, encoder: e.target.value as Encoder, bitDepth: '8' })}>
         <option value="auto">自动选择 · 优先显卡</option>{encoders.map(item => <option key={item.id} value={item.id} disabled={!available(item.id)}>{item.label}{available(item.id) ? '' : ' · 不可用'}</option>)}<option value="cpu">CPU 软件编码</option>
       </select></label><p className={`acceleration-status ${unavailable ? 'unavailable' : ''}`} role="status">{hardware.detecting ? '正在检测可用编码器…' : fixedCPU ? '当前方案使用 CPU，保证编码参数一致。' : unavailable ? '当前编码器不可用，请选择自动或 CPU。' : `当前：${actualLabel}`}</p>
@@ -59,6 +67,7 @@ export function CompressionSettings({ options: o, onChange, locked, hardware }: 
       </div>
 
       <div className="setting-block extra-settings"><label className="form-label">音频处理<select aria-label="音频处理" value={o.audio} onChange={e => patch('audio', e.target.value as Options['audio'])}><option value="keep">AAC · 兼容输出</option><option value="copy">复制原音轨 · 避免二次压缩</option><option value="mute">移除音频</option></select></label>{o.audio === 'keep' && <label className="form-label spaced-field">音频码率<select aria-label="音频码率" value={o.audioKbps} onChange={e => patch('audioKbps', Number(e.target.value))}>{[64, 96, 128, 160, 192, 256, 320].map(value => <option key={value} value={value}>{value} kbps</option>)}</select></label>}<p className="field-hint">复制音轨需与输出容器兼容；10bit 编码不会恢复源文件已丢失的细节。</p></div>
+      </>}
     </fieldset>
     <div className="settings-tip"><Info size={16} /><p>压缩看画质与体积的取舍。不同编码器的系数不可直接比较；二遍编码不保证比恒定画质更清晰。</p></div>
   </aside>

@@ -3,7 +3,7 @@ import type { Job, Options } from './types'
 
 export function TranscodeAdvice({ jobs, options, onChange, locked }: { jobs: Job[]; options: Options; onChange: (value: Options) => void; locked: boolean }) {
   const pending = jobs.filter(job => job.status === 'queued')
-  if (!pending.length) return null
+  if (!pending.length || options.strategy === 'smart') return null
   const hevcToH264 = options.codec === 'h264' && pending.some(job => job.codec === 'hevc')
   const oversizedTarget = options.rateControl === 'size' && pending.some(job => options.targetMB * 1024 * 1024 >= job.size)
   const needsHEVC = options.codec === 'h265'

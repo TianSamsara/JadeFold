@@ -6,11 +6,15 @@ const directory = path.join(root, '.test-artifacts/benchmark', String(Date.now()
 const base = { encoder: 'cpu', codec: 'h264', format: 'mp4', resolution: 'original', crf: 24, speed: 'veryslow', audio: 'mute', parallel: false, strategy: 'maruko', content: 'general', rateControl: 'size', targetMB: 0.12, bitDepth: '8', audioKbps: 128 };
 async function metrics(reference, output, name) {
   const work = path.join(directory, name); await fs.mkdir(work, { recursive: true });
-  const normalize = '[0:v]settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[d];[1:v]settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[r];';
-  await engine.run(engine.binaryPaths().ffmpeg, ['-v', 'error', '-i', output, '-i', reference, '-lavfi', `${normalize}[d][r]libvmaf=log_fmt=json:log_path=vmaf.json:n_threads=2`, '-an', '-f', 'null', '-'], { cwd: work, timeout: 120000 });
-  await engine.run(engine.binaryPaths().ffmpeg, ['-v', 'error', '-i', output, '-i', reference, '-lavfi', `${normalize}[d][r]ssim=stats_file=ssim.log`, '-an', '-f', 'null', '-'], { cwd: work, timeout: 120000 });
+  const normalize = '[0:v]settb=1/25,setpts=N,format=yuv420p[d];[1:v]settb=1/25,setpts=N,format=yuv420p[r];';
+  await engine.run(engine.binaryPaths().ffmpeg, ['-v', 'error', '-i', output, '-i', reference, '-lavfi', `${normalize}[d][r]libvmaf=log_fmt=json:log_path=vmaf.json:n_threads=2`, '-an', '-fps_mode:v', 'passthrough', '-f', 'null', '-'], { cwd: work, timeout: 120000 });
+  await engine.run(engine.binaryPaths().ffmpeg, ['-v', 'error', '-i', output, '-i', reference, '-lavfi', `${normalize}[d][r]ssim=stats_file=ssim.log`, '-an', '-fps_mode:v', 'passthrough', '-f', 'null', '-'], { cwd: work, timeout: 120000 });
+  const expected = await engine.probeMedia(reference, { countFrames: true });
+  const actual = await engine.probeMedia(output, { countFrames: true });
+  if (expected.frameCount !== actual.frameCount) throw new Error('Frame count mismatch');
   const vmaf = JSON.parse(await fs.readFile(path.join(work, 'vmaf.json'), 'utf8'));
   const ssim = [...(await fs.readFile(path.join(work, 'ssim.log'), 'utf8')).matchAll(/All:([0-9.]+)/g)].map(match => Number(match[1]));
+  if (ssim.length !== expected.frameCount || vmaf.frames.length !== expected.frameCount) throw new Error('Metric frame alignment failed');
   if (!ssim.length || !Number.isFinite(vmaf.pooled_metrics?.vmaf?.mean)) throw new Error('Quality measurement did not produce valid metrics');
   return { vmaf: vmaf.pooled_metrics.vmaf.mean, ssim: ssim.reduce((a, b) => a + b, 0) / ssim.length, measuredFrames: ssim.length };
 }

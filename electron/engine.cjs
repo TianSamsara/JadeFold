@@ -8,9 +8,12 @@ function binaryPaths() {
   return { ffmpeg: unpack(require('ffmpeg-static')), ffprobe: unpack(require('ffprobe-static').path) };
 }
 
-function run(executable, args, { timeout = 30000, maxBytes = 8 * 1024 * 1024, cwd } = {}) {
+function run(executable, args, { timeout = 30000, maxBytes = 8 * 1024 * 1024, cwd, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('已取消'));
     const child = spawn(executable, args, { cwd, windowsHide: true, shell: false });
+    const abort = () => child.kill();
+    signal?.addEventListener('abort', abort, { once: true });
     const chunks = []; let bytes = 0; let error = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error('读取视频超时，请检查文件是否可正常播放。')); }, timeout);
     child.stdout.on('data', chunk => {
@@ -19,13 +22,13 @@ function run(executable, args, { timeout = 30000, maxBytes = 8 * 1024 * 1024, cw
       else chunks.push(chunk);
     });
     child.stderr.on('data', chunk => { error = (error + chunk.toString()).slice(-4000); });
-    child.on('error', err => { clearTimeout(timer); reject(new Error(`无法启动视频引擎：${err.message}`)); });
-    child.on('close', code => { clearTimeout(timer); code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(error || '无法读取此视频，请确认文件完整且格式受支持。')); });
+    child.on('error', err => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new Error(`无法启动视频引擎：${err.message}`)); });
+    child.on('close', code => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (signal?.aborted) reject(new Error('已取消')); else code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(error || '无法读取此视频，请确认文件完整且格式受支持。')); });
   });
 }
 
-async function probeMedia(input) {
-  const raw = await run(binaryPaths().ffprobe, ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_format', '-show_streams', '-of', 'json', input]);
+async function probeMedia(input, runtime = {}) {
+  const raw = await run(binaryPaths().ffprobe, ['-v', 'error', '-protocol_whitelist', 'file,pipe', ...(runtime.countFrames ? ['-count_frames'] : []), '-show_format', '-show_streams', '-of', 'json', input], runtime);
   const data = JSON.parse(raw.toString());
   const video = data.streams?.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
   if (!video) throw new Error('此文件没有可压缩的视频画面。');
@@ -33,7 +36,7 @@ async function probeMedia(input) {
   if (!Number.isFinite(duration) || duration <= 0) throw new Error('无法识别视频时长，请尝试完整的本地视频。');
   const audio = data.streams?.find(stream => stream.codec_type === 'audio');
   const [numerator, denominator] = (video.avg_frame_rate || '0/1').split('/').map(Number);
-  return { duration, width: video.width, height: video.height, videoIndex: video.index, fps: denominator ? numerator / denominator : 0, codec: video.codec_name, codecTag: video.codec_tag_string || '', profile: video.profile || '', videoBitrate: Number(video.bit_rate || 0), totalBitrate: Number(data.format?.bit_rate || 0), pixelFormat: video.pix_fmt, hasAudio: !!audio, audioCodec: audio?.codec_name || '', audioBitrate: Number(audio?.bit_rate || 0) };
+  return { duration, frameCount: Number(video.nb_frames || video.nb_read_frames || 0), width: video.width, height: video.height, videoIndex: video.index, fps: denominator ? numerator / denominator : 0, codec: video.codec_name, codecTag: video.codec_tag_string || '', profile: video.profile || '', videoBitrate: Number(video.bit_rate || video.tags?.BPS || 0), totalBitrate: Number(data.format?.bit_rate || 0), pixelFormat: video.pix_fmt, hasAudio: !!audio, audioCodec: audio?.codec_name || '', audioBitrate: Number(audio?.bit_rate || audio?.tags?.BPS || 0), colorTransfer: video.color_transfer || '', fieldOrder: video.field_order || '', videoStreams: data.streams.filter(stream => stream.codec_type === 'video' && !stream.disposition?.attached_pic).length, audioStreams: data.streams.filter(stream => stream.codec_type === 'audio').length, subtitleStreams: data.streams.filter(stream => stream.codec_type === 'subtitle').length, attachmentStreams: data.streams.filter(stream => stream.codec_type === 'attachment' || stream.disposition?.attached_pic).length };
 }
 
 async function inspect(input) {
@@ -53,13 +56,13 @@ async function inspect(input) {
 
 function validateOptions(value) {
   const options = { codec: value?.codec, format: value?.format, resolution: value?.resolution, crf: Number(value?.crf), speed: value?.speed, audio: value?.audio, encoder: value?.encoder ?? 'cpu', parallel: value?.parallel ?? false,
-    strategy: value?.strategy ?? 'standard', content: value?.content ?? 'general', rateControl: value?.rateControl ?? 'quality', targetMB: Number(value?.targetMB ?? 50), bitDepth: value?.bitDepth ?? '8', audioKbps: Number(value?.audioKbps ?? 128) };
+    strategy: value?.strategy ?? 'standard', content: value?.content ?? 'general', rateControl: value?.rateControl ?? 'quality', targetMB: Number(value?.targetMB ?? 50), bitDepth: value?.bitDepth ?? '8', audioKbps: Number(value?.audioKbps ?? 128), smartCodec: value?.smartCodec ?? 'preserve' };
   if (!['h264', 'h265'].includes(options.codec) || !['mp4', 'mkv'].includes(options.format)
     || !['original', '1080', '720', '480'].includes(options.resolution)
     || !Number.isFinite(options.crf) || !Number.isInteger(options.crf * 2) || options.crf < 18 || options.crf > 35
     || !['fast', 'medium', 'slow', 'slower', 'veryslow'].includes(options.speed) || !['keep', 'mute', 'copy'].includes(options.audio)
     || !['auto', 'cpu', 'nvenc', 'qsv', 'amf'].includes(options.encoder) || typeof options.parallel !== 'boolean'
-    || !['standard', 'efficient', 'maruko'].includes(options.strategy) || !['general', 'animation', 'screen'].includes(options.content)
+    || !['standard', 'efficient', 'maruko', 'smart'].includes(options.strategy) || !['general', 'animation', 'screen'].includes(options.content) || !['preserve', 'hevc'].includes(options.smartCodec)
     || !['quality', 'size'].includes(options.rateControl) || !Number.isFinite(options.targetMB) || options.targetMB < 0.1 || options.targetMB > 102400
     || !['8', '10'].includes(options.bitDepth) || ![64, 96, 128, 160, 192, 256, 320].includes(options.audioKbps)) {
     throw new Error('压缩设置无效，请重新选择预设。');
@@ -138,6 +141,7 @@ function buildArgs(job, options, output, runtime = {}) {
     ? 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
     : `scale=w='min(iw,${o.resolution === '1080' ? 1920 : o.resolution === '720' ? 1280 : 854})':h='min(ih,${o.resolution})':force_original_aspect_ratio=decrease:force_divisible_by=2`;
   args.push('-vf', filter);
+  if (runtime.preserveFrames) args.push('-fps_mode:v', 'passthrough');
   if (o.codec === 'h265') args.push('-tag:v', 'hvc1');
   if (o.audio === 'mute' || runtime.pass === 1) args.push('-an');
   else if (o.audio === 'copy') args.push('-c:a', 'copy');
@@ -178,6 +182,7 @@ async function publishOutput(temp, directory, name, extension) {
 
 async function compress(job, options, directory, onProgress, signal, runtime = {}) {
   const o = validateOptions(options);
+  if (runtime.maxOutputBytes !== undefined && (!Number.isSafeInteger(runtime.maxOutputBytes) || runtime.maxOutputBytes < 1)) throw new Error('输出体积保护阈值无效。');
   if (o.audio === 'copy' && job.hasAudio && o.format === 'mp4' && !['aac', 'mp3', 'ac3', 'eac3', 'alac'].includes(job.audioCodec)) throw new Error('原音轨不适合当前 MP4 输出，请选择 AAC 或 MKV。');
   const destination = path.resolve(directory);
   const videoBitrate = o.rateControl === 'size' ? targetVideoBitrate(job, o) : undefined;
@@ -213,15 +218,19 @@ async function compress(job, options, directory, onProgress, signal, runtime = {
       });
     }
     if (signal.aborted) throw new Error('已取消');
-    const outputMedia = await probeMedia(temp);
+    const outputMedia = await probeMedia(temp, { signal });
     if (signal.aborted) throw new Error('已取消');
+    const candidateStat = await fs.stat(temp);
+    if (runtime.maxOutputBytes !== undefined && candidateStat.size > runtime.maxOutputBytes) {
+      return { skipped: true, skipReason: '实际输出未达到至少 5% 的缩小目标，已保留原片，没有生成新的成品文件。', attemptedOutputSize: candidateStat.size, options: o };
+    }
     const output = await publishOutput(temp, destination, job.name, o.format);
     const stat = await fs.stat(output);
     const compressionOutcome = stat.size < job.size ? 'reduced' : stat.size > job.size ? 'expanded' : 'unchanged';
     const compressionWarning = compressionOutcome === 'reduced' ? '' : '本次完成了转码，但没有减小文件。输出已保留；若目标是减小体积，请使用指定体积模式或调整编码器与画质。';
-    return { output, outputSize: stat.size, completedAt: new Date().toISOString(), options: o, encoder: o.encoder, encoderLabel: encoderNames[o.encoder], phaseLabel: '', targetVideoBitrate: videoBitrate, outputCodec: outputMedia.codec, outputCodecTag: outputMedia.codecTag, outputVideoBitrate: outputMedia.videoBitrate, outputTotalBitrate: outputMedia.totalBitrate, compressionOutcome, compressionWarning };
+    return { output, outputSize: stat.size, completedAt: new Date().toISOString(), options: o, encoder: o.encoder, encoderLabel: encoderNames[o.encoder], phaseLabel: '', targetVideoBitrate: videoBitrate, outputCodec: outputMedia.codec, outputCodecTag: outputMedia.codecTag, outputFrameCount: outputMedia.frameCount, outputVideoBitrate: outputMedia.videoBitrate, outputTotalBitrate: outputMedia.totalBitrate, compressionOutcome, compressionWarning };
   } finally {
-    if (path.dirname(work) === destination && path.basename(work).startsWith('.jadefold-')) await fs.rm(work, { recursive: true, force: true }).catch(() => {});
+    if (path.dirname(work) === destination && path.basename(work).startsWith('.jadefold-')) await fs.rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
 }
 

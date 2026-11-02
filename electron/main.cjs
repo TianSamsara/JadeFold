@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { runLanes } = require('./queue.cjs');
+const { planBalanced, POLICY } = require('./smart.cjs');
 const { inspect, compress, validateOptions, binaryPaths, detectHardware, resolveEncoder, encoderNames } = require('./engine.cjs');
 if (process.env.FRAME_TEST_DATA) app.setPath('userData', path.resolve(process.env.FRAME_TEST_DATA));
 let window; let jobs = []; let history = []; let busy = false; let importing = false; let controller; let lastError = ''; let engineReady = false;
@@ -47,8 +48,19 @@ async function runQueue(options) {
       job.status = 'processing'; job.progress = 0; job.startedAt = Date.now(); job.error = ''; emit();
       try {
         let effective = lane;
+        const smart = options.strategy === 'smart';
+        if (smart) {
+          job.smartAnalysis = await planBalanced(job, options, outputDirectory, analysis => { job.smartAnalysis = analysis; job.progress = analysis.progress; job.phaseLabel = analysis.phase; emit(); }, signal, { cpuThreads });
+          if (job.smartAnalysis.decision === 'skip') {
+            job.status = 'skipped'; job.skipReason = job.smartAnalysis.reason; job.progress = 100; job.phaseLabel = '';
+            history = history.filter(item => item.id !== job.id); history.unshift({ ...job }); history = history.slice(0, 100);
+            await saveHistory().catch(() => { lastError = '原片已保留，但分析记录未能写入磁盘。'; });
+            emit(); return;
+          }
+          effective = job.smartAnalysis.options;
+        }
         job.encoder = effective.encoder; job.encoderLabel = encoderNames[effective.encoder]; job.notice = ''; emit();
-        const encode = () => compress(job, effective, outputDirectory, (progress, phase) => { job.progress = progress; job.phaseLabel = phase; emit(); }, signal, mixed ? { cpuThreads } : {});
+        const encode = () => compress(job, effective, outputDirectory, (progress, phase) => { job.progress = smart ? 15 + progress * 0.85 : progress; job.phaseLabel = phase; emit(); }, signal, smart ? { cpuThreads, preserveFrames: true, maxOutputBytes: Math.max(1, Math.floor(job.size * (1 - POLICY.actualSaving))) } : mixed ? { cpuThreads } : {});
         let result;
         try { result = await encode(); }
         catch (error) {
@@ -58,8 +70,9 @@ async function runQueue(options) {
           result = await encode();
         }
         Object.assign(job, result);
-        job.status = 'completed'; job.progress = 100;
-        history.unshift({ ...job }); history = history.slice(0, 100);
+        job.status = result.skipped ? 'skipped' : 'completed'; job.progress = 100;
+        if (result.skipped) { job.phaseLabel = ''; job.smartAnalysis = { ...job.smartAnalysis, decision: 'skip', reason: result.skipReason }; }
+        history = history.filter(item => item.id !== job.id); history.unshift({ ...job }); history = history.slice(0, 100);
         await saveHistory().catch(() => { lastError = '视频已保存，但处理记录未能写入磁盘。'; });
       } catch (error) { job.status = signal.aborted ? 'cancelled' : 'failed'; job.error = error.message; }
       emit();
@@ -116,8 +129,15 @@ app.whenReady().then(async () => {
   handle('cancel', () => { controller?.abort(); return snapshot(); });
   handle('remove', id => { if (!busy) jobs = jobs.filter(job => job.id !== id); emit(); return snapshot(); });
   handle('clear', () => { if (!busy) jobs = []; emit(); return snapshot(); });
-  handle('retry', id => { const job = jobs.find(item => item.id === id); if (!busy && job && ['failed', 'cancelled'].includes(job.status)) { job.status = 'queued'; job.progress = 0; job.error = ''; } emit(); return snapshot(); });
-  handle('reveal', id => { const job = [...jobs, ...history].find(item => item.id === id && item.output); if (job) shell.showItemInFolder(job.output); });
+  handle('retry', async id => {
+    const job = jobs.find(item => item.id === id);
+    if (!busy && !importing) {
+      if (!job) { const previous = history.find(item => item.id === id && item.status === 'skipped'); if (previous) return addFiles([previous.path]); }
+      else if (['failed', 'cancelled', 'skipped'].includes(job.status)) { job.status = 'queued'; job.progress = 0; job.error = ''; job.skipReason = ''; job.smartAnalysis = null; }
+    }
+    emit(); return snapshot();
+  });
+  handle('reveal', id => { const job = [...jobs, ...history].find(item => item.id === id && (item.output || item.status === 'skipped')); if (job) shell.showItemInFolder(job.output || job.path); });
   handle('open-directory', async () => { await fs.mkdir(outputDirectory, { recursive: true }); const error = await shell.openPath(outputDirectory); if (error) throw new Error(error); });
   handle('clear-history', async () => { history = []; await saveHistory(); emit(); return snapshot(); });
   if (process.env.FRAME_DEV_URL === 'http://127.0.0.1:5173') await window.loadURL(process.env.FRAME_DEV_URL);

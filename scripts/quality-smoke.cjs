@@ -23,7 +23,8 @@ async function waitForState(page, predicate) {
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
     await waitForState(page, state => !state.hardware.detecting);
     const scheme = page.getByRole('combobox', { name: '编码方案', exact: true });
-    assert.equal(await scheme.inputValue(), 'efficient');
+    assert.equal(await scheme.inputValue(), 'smart');
+    await scheme.selectOption('efficient');
     await page.getByRole('combobox', { name: '素材类型', exact: true }).selectOption('screen');
     assert.equal(await page.getByRole('combobox', { name: '视频编码', exact: true }).inputValue(), 'h264');
     await page.getByRole('combobox', { name: '素材类型', exact: true }).selectOption('animation');
