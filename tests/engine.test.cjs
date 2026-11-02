@@ -2,9 +2,9 @@ const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { binaryPaths, run, inspect, validateOptions, buildArgs, parseProgress, compress, resolveEncoder, detectHardware } = require('../electron/engine.cjs');
+const { binaryPaths, run, inspect, validateOptions, buildArgs, parseProgress, compress, resolveEncoder, detectHardware, targetVideoBitrate } = require('../electron/engine.cjs');
 const directory = path.resolve(__dirname, '../.test-artifacts/engine');
-const options = { codec: 'h264', format: 'mp4', resolution: '480', crf: 31, speed: 'fast', audio: 'keep', encoder: 'cpu', parallel: false };
+const options = { codec: 'h264', format: 'mp4', resolution: '480', crf: 31, speed: 'fast', audio: 'keep', encoder: 'cpu', parallel: false, strategy: 'standard', content: 'general', rateControl: 'quality', targetMB: 50, bitDepth: '8', audioKbps: 128 };
 let source;
 before(async () => {
   await fs.mkdir(directory, { recursive: true });

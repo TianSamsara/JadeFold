@@ -26,3 +26,5 @@ FFmpeg 对应源码：https://github.com/FFmpeg/FFmpeg/commit/e38092ef93
 FFprobe 对应 FFmpeg 4.0.2 源码：https://ffmpeg.org/releases/ffmpeg-4.0.2.tar.xz ，构建配置可执行 `ffprobe -buildconf` 查看。FFprobe 二进制来自 ffprobe-static 包所附 Zeranoe 构建。
 
 当前产物用于本地开发和试用。若向第三方正式分发，需依各组件许可提供完整的对应源码、构建脚本及许可声明，并处理发行签名；本文件中的上游链接不替代 GPL 要求的完整对应源码交付。
+
+小丸经典参数参考来自 Apache-2.0 许可的旧版源码镜像 https://github.com/wzxjohn/marukotoolbox （mp4box/MainForm.cs 的 CRF / 2-pass 命令配置）。本应用独立实现参数映射与任务执行，不包含原小丸程序或其工具二进制。参数事实的参考不意味着原作者对本项目的背书。

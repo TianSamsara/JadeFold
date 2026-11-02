@@ -26,6 +26,7 @@ async function waitForState(page, predicate, timeout = 30000) {
     page.setDefaultTimeout(15000);
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
+    await page.getByRole('combobox', { name: '编码方案', exact: true }).selectOption('standard');
     await page.waitForFunction(() => !!window.frame);
     console.log('Renderer ready');
     const ready = await page.evaluate(async () => (await window.frame.getState()).engineReady); assert.ok(ready);
@@ -84,7 +85,7 @@ async function waitForState(page, predicate, timeout = 30000) {
       const fallbackState = await waitForState(page, state => ['completed', 'failed', 'cancelled'].includes(state.jobs[0]?.status));
       assert.equal(fallbackState.jobs[0].status, 'completed'); assert.equal(fallbackState.jobs[0].encoder, 'cpu');
       assert.match(fallbackState.jobs[0].notice, /已改用 CPU/);
-      assert.ok(!(await fs.readdir(output)).some(name => name.includes('.partial.')));
+      assert.ok(!(await fs.readdir(output)).some(name => name.includes('.partial.') || name.startsWith('.jadefold-')));
       fallback = 'verified: tiny frame rejected by NVENC, CPU output saved';
       await page.screenshot({ path: path.join(root, '.test-artifacts/desktop-gpu-fallback.png'), scale: 'css' });
     }

@@ -27,6 +27,7 @@ async function waitForState(page, predicate, timeout = 60000) {
   try {
     const page = await app.firstWindow(); page.setDefaultTimeout(15000);
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
+    await page.getByRole('combobox', { name: '编码方案', exact: true }).selectOption('standard');
     const detected = await waitForState(page, state => !state.hardware.detecting);
     const gpu = ['nvenc', 'qsv', 'amf'].find(id => detected.hardware.encoders.some(item => item.id === id && item.codecs.includes('h264')));
     if (!gpu) { console.log('Mixed integration skipped: no usable GPU encoder'); return; }
@@ -58,7 +59,7 @@ async function waitForState(page, predicate, timeout = 60000) {
     const cancelled = await waitForState(page, state => !state.busy);
     assert.equal(cancelled.jobs[2].status, 'queued');
     assert.equal(cancelled.jobs.filter(job => job.status === 'cancelled').length, 2);
-    assert.ok(!(await fs.readdir(output)).some(name => name.includes('.partial.')));
+    assert.ok(!(await fs.readdir(output)).some(name => name.includes('.partial.') || name.startsWith('.jadefold-')));
     console.log(JSON.stringify({ passed: true, simultaneousEncoders: running.jobs.map(job => job.encoder), completed: finished.jobs.length, cancelled: 2, waiting: 1, historyRecords: saved.history.length }));
   } finally { await app.evaluate(({ app }) => app.exit(0)).catch(() => {}); await app.close().catch(() => {}); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -48,7 +48,7 @@ async function runQueue(options) {
       try {
         let effective = lane;
         job.encoder = effective.encoder; job.encoderLabel = encoderNames[effective.encoder]; job.notice = ''; emit();
-        const encode = () => compress(job, effective, outputDirectory, progress => { job.progress = progress; emit(); }, signal, mixed ? { cpuThreads } : {});
+        const encode = () => compress(job, effective, outputDirectory, (progress, phase) => { job.progress = progress; job.phaseLabel = phase; emit(); }, signal, mixed ? { cpuThreads } : {});
         let result;
         try { result = await encode(); }
         catch (error) {
