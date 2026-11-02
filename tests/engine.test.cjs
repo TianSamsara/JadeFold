@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { binaryPaths, run, inspect, validateOptions, buildArgs, parseProgress, compress, resolveEncoder, detectHardware } = require('../electron/engine.cjs');
 const directory = path.resolve(__dirname, '../.test-artifacts/engine');
-const options = { codec: 'h264', format: 'mp4', resolution: '480', crf: 31, speed: 'fast', audio: 'keep', encoder: 'cpu' };
+const options = { codec: 'h264', format: 'mp4', resolution: '480', crf: 31, speed: 'fast', audio: 'keep', encoder: 'cpu', parallel: false };
 let source;
 before(async () => {
   await fs.mkdir(directory, { recursive: true });
@@ -16,6 +16,7 @@ test('rejects injected or out-of-range settings', () => {
   assert.throws(() => validateOptions({ ...options, crf: NaN }));
   assert.throws(() => validateOptions({ ...options, resolution: '../../' }));
   assert.throws(() => validateOptions({ ...options, encoder: 'nvenc;whoami' }));
+  assert.throws(() => validateOptions({ ...options, parallel: 'yes' }));
   assert.deepEqual(validateOptions(options), options);
 });
 test('uses argument arrays and preserves path with quotes', () => {
@@ -26,6 +27,9 @@ test('uses argument arrays and preserves path with quotes', () => {
   assert.equal(parseProgress('out_time_us=1500000\r', 3), 50);
   assert.equal(parseProgress('out_time_us=99999999', 3), 99);
   assert.equal(parseProgress('frame=30', 3), null);
+  const limited = buildArgs({ path: source, videoIndex: 0 }, { ...options, codec: 'h265' }, 'limited.mp4', { cpuThreads: 4 });
+  assert.equal(limited[limited.indexOf('-x265-params') + 1], 'pools=4:frame-threads=2');
+  assert.throws(() => buildArgs({ path: source, videoIndex: 0 }, options, 'limited.mp4', { cpuThreads: -1 }));
 });
 test('compresses a real video and never overwrites a duplicate output', async () => {
   const job = await inspect(source);
@@ -50,7 +54,7 @@ test('H.265 MKV supports muted audio and real downscaling', async () => {
   const large = path.join(directory, 'vertical.mp4');
   await run(binaryPaths().ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=480x854:rate=12', '-t', '1', '-c:v', 'libx264', large]);
   const portrait = await inspect(large);
-  const result = await compress(portrait, { ...options, codec: 'h265', format: 'mkv', audio: 'mute' }, directory, () => {}, new AbortController().signal);
+  const result = await compress(portrait, { ...options, codec: 'h265', format: 'mkv', audio: 'mute' }, directory, () => {}, new AbortController().signal, { cpuThreads: 2 });
   const output = await inspect(result.output);
   assert.equal(output.codec, 'hevc'); assert.ok(output.width <= 480); assert.ok(output.height <= 480);
   assert.ok(output.width % 2 === 0 && output.height % 2 === 0);

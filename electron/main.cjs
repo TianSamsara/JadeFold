@@ -1,18 +1,25 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const os = require('node:os');
+const { runLanes } = require('./queue.cjs');
 const { inspect, compress, validateOptions, binaryPaths, detectHardware, resolveEncoder, encoderNames } = require('./engine.cjs');
 if (process.env.FRAME_TEST_DATA) app.setPath('userData', path.resolve(process.env.FRAME_TEST_DATA));
-let window; let jobs = []; let history = []; let busy = false; let importing = false; let controller; let stop = false; let lastError = ''; let engineReady = false;
+let window; let jobs = []; let history = []; let busy = false; let importing = false; let controller; let lastError = ''; let engineReady = false;
 let outputDirectory;
 let hardware = { detecting: true, encoders: [] };
+let historyWrite = Promise.resolve();
 const snapshot = () => ({ jobs, history, busy, importing, outputDirectory, lastError, engineReady, hardware });
 const emit = () => { if (window && !window.isDestroyed()) window.webContents.send('frame:updated', snapshot()); };
 const historyFile = () => path.join(app.getPath('userData'), 'history.json');
 async function saveHistory() {
-  await fs.mkdir(app.getPath('userData'), { recursive: true });
-  await fs.writeFile(historyFile() + '.tmp', JSON.stringify({ history: history.slice(0, 100), outputDirectory }), 'utf8');
-  await fs.rename(historyFile() + '.tmp', historyFile());
+  const contents = JSON.stringify({ history: history.slice(0, 100), outputDirectory });
+  historyWrite = historyWrite.catch(() => {}).then(async () => {
+    await fs.mkdir(app.getPath('userData'), { recursive: true });
+    await fs.writeFile(historyFile() + '.tmp', contents, 'utf8');
+    await fs.rename(historyFile() + '.tmp', historyFile());
+  });
+  return historyWrite;
 }
 async function addFiles(paths) {
   if (busy || importing) throw new Error('当前正在处理文件，请稍后再添加。');
@@ -29,20 +36,23 @@ async function addFiles(paths) {
   return snapshot();
 }
 async function runQueue(options) {
+  const primary = resolveEncoder(options, hardware);
+  const pending = jobs.filter(job => job.status === 'queued');
+  const mixed = options.parallel && primary.encoder !== 'cpu' && pending.length > 1;
+  const lanes = mixed ? [primary, { ...primary, encoder: 'cpu' }] : [primary];
+  const cpuThreads = Math.max(1, Math.min(8, Math.floor(os.availableParallelism() / 2)));
+  const signal = controller.signal;
   try {
-    for (const job of jobs) {
-      if (stop) break;
-      if (job.status !== 'queued') continue;
-      controller = new AbortController();
+    await runLanes(pending, lanes, async (job, lane) => {
       job.status = 'processing'; job.progress = 0; job.startedAt = Date.now(); job.error = ''; emit();
       try {
-        let effective = resolveEncoder(options, hardware);
+        let effective = lane;
         job.encoder = effective.encoder; job.encoderLabel = encoderNames[effective.encoder]; job.notice = ''; emit();
-        const encode = () => compress(job, effective, outputDirectory, progress => { job.progress = progress; emit(); }, controller.signal);
+        const encode = () => compress(job, effective, outputDirectory, progress => { job.progress = progress; emit(); }, signal, mixed ? { cpuThreads } : {});
         let result;
         try { result = await encode(); }
         catch (error) {
-          if (options.encoder !== 'auto' || effective.encoder === 'cpu' || controller.signal.aborted) throw error;
+          if (options.encoder !== 'auto' || effective.encoder === 'cpu' || signal.aborted) throw error;
           job.notice = `${encoderNames[effective.encoder]} 处理此视频失败，已改用 CPU 编码。`;
           effective = { ...effective, encoder: 'cpu' }; job.encoder = 'cpu'; job.encoderLabel = encoderNames.cpu; job.progress = 0; emit();
           result = await encode();
@@ -51,10 +61,12 @@ async function runQueue(options) {
         job.status = 'completed'; job.progress = 100;
         history.unshift({ ...job }); history = history.slice(0, 100);
         await saveHistory().catch(() => { lastError = '视频已保存，但处理记录未能写入磁盘。'; });
-      } catch (error) { job.status = controller.signal.aborted ? 'cancelled' : 'failed'; job.error = error.message; }
+      } catch (error) { job.status = signal.aborted ? 'cancelled' : 'failed'; job.error = error.message; }
       emit();
-    }
-  } finally { busy = false; controller = null; stop = false; emit(); }
+    }, signal);
+  } catch (error) {
+    lastError = `队列处理失败：${error.message}`;
+  } finally { busy = false; controller = null; emit(); }
 }
 function handle(name, handler) {
   ipcMain.handle(`frame:${name}`, async (event, ...args) => {
@@ -72,9 +84,9 @@ app.whenReady().then(async () => {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.on('close', event => {
     if (busy) {
-      const choice = dialog.showMessageBoxSync(window, { type: 'question', buttons: ['继续压缩', '取消任务并退出'], defaultId: 0, cancelId: 0, message: '视频正在压缩，确定退出吗？', detail: '退出会取消当前任务，未完成的输出会被清理。' });
+      const choice = dialog.showMessageBoxSync(window, { type: 'question', buttons: ['继续压缩', '取消任务并退出'], defaultId: 0, cancelId: 0, message: '视频正在压缩，确定退出吗？', detail: '退出会取消所有正在处理的任务，未完成的输出会被清理。' });
       event.preventDefault();
-      if (choice === 1) { stop = true; controller?.abort(); const timer = setInterval(() => { if (!busy) { clearInterval(timer); window.destroy(); app.quit(); } }, 100); }
+      if (choice === 1) { controller?.abort(); const timer = setInterval(() => { if (!busy) { clearInterval(timer); window.destroy(); app.quit(); } }, 100); }
     }
   });
   handle('state', () => snapshot());
@@ -97,11 +109,11 @@ app.whenReady().then(async () => {
     if (hardware.detecting) throw new Error('正在检测显卡编码能力，请稍候。');
     resolveEncoder(options, hardware);
     if (!jobs.some(job => job.status === 'queued')) throw new Error('请先添加视频，或重试未完成的任务。');
-    busy = true; stop = false; lastError = ''; emit();
+    busy = true; lastError = ''; controller = new AbortController(); emit();
     void runQueue(options);
     return snapshot();
   });
-  handle('cancel', () => { stop = true; controller?.abort(); return snapshot(); });
+  handle('cancel', () => { controller?.abort(); return snapshot(); });
   handle('remove', id => { if (!busy) jobs = jobs.filter(job => job.id !== id); emit(); return snapshot(); });
   handle('clear', () => { if (!busy) jobs = []; emit(); return snapshot(); });
   handle('retry', id => { const job = jobs.find(item => item.id === id); if (!busy && job && ['failed', 'cancelled'].includes(job.status)) { job.status = 'queued'; job.progress = 0; job.error = ''; } emit(); return snapshot(); });

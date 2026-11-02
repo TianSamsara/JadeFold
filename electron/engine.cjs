@@ -47,12 +47,12 @@ async function inspect(input) {
 }
 
 function validateOptions(value) {
-  const options = { codec: value?.codec, format: value?.format, resolution: value?.resolution, crf: Number(value?.crf), speed: value?.speed, audio: value?.audio, encoder: value?.encoder ?? 'cpu' };
+  const options = { codec: value?.codec, format: value?.format, resolution: value?.resolution, crf: Number(value?.crf), speed: value?.speed, audio: value?.audio, encoder: value?.encoder ?? 'cpu', parallel: value?.parallel ?? false };
   if (!['h264', 'h265'].includes(options.codec) || !['mp4', 'mkv'].includes(options.format)
     || !['original', '1080', '720', '480'].includes(options.resolution)
     || !Number.isInteger(options.crf) || options.crf < 18 || options.crf > 35
     || !['fast', 'medium', 'slow'].includes(options.speed) || !['keep', 'mute'].includes(options.audio)
-    || !['auto', 'cpu', 'nvenc', 'qsv', 'amf'].includes(options.encoder)) {
+    || !['auto', 'cpu', 'nvenc', 'qsv', 'amf'].includes(options.encoder) || typeof options.parallel !== 'boolean') {
     throw new Error('压缩设置无效，请重新选择预设。');
   }
   return options;
@@ -95,9 +95,17 @@ async function detectHardware() {
   return { detecting: false, encoders };
 }
 
-function buildArgs(job, options, output) {
+function buildArgs(job, options, output, runtime = {}) {
   const o = validateOptions(options);
-  const args = ['-hide_banner', '-nostdin', '-n', '-protocol_whitelist', 'file,pipe', '-i', job.path, '-map', `0:${job.videoIndex}`, '-map', '0:a:0?', '-sn', '-dn', ...videoEncoderArgs(o), '-pix_fmt', 'yuv420p'];
+  const limited = runtime.cpuThreads;
+  if (limited !== undefined && (!Number.isInteger(limited) || limited < 1 || limited > 256)) throw new Error('CPU 线程预算无效。');
+  const args = ['-hide_banner', '-nostdin', '-n'];
+  if (limited) args.push('-threads', String(limited), '-filter_threads', String(Math.min(2, limited)));
+  args.push('-protocol_whitelist', 'file,pipe', '-i', job.path, '-map', `0:${job.videoIndex}`, '-map', '0:a:0?', '-sn', '-dn', ...videoEncoderArgs(o), '-pix_fmt', 'yuv420p');
+  if (o.encoder === 'cpu' && limited) {
+    args.push('-threads', String(limited));
+    if (o.codec === 'h265') args.push('-x265-params', `pools=${limited}:frame-threads=${Math.min(2, limited)}`);
+  }
   const filter = o.resolution === 'original'
     ? 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
     : `scale=w='min(iw,${o.resolution === '1080' ? 1920 : o.resolution === '720' ? 1280 : 854})':h='min(ih,${o.resolution})':force_original_aspect_ratio=decrease:force_divisible_by=2`;
@@ -127,14 +135,14 @@ async function publishOutput(temp, directory, name, extension) {
   throw new Error('同名输出文件过多，请更换输出目录。');
 }
 
-async function compress(job, options, directory, onProgress, signal) {
+async function compress(job, options, directory, onProgress, signal, runtime = {}) {
   const o = validateOptions(options);
   await fs.mkdir(directory, { recursive: true });
   const temp = path.join(directory, `.frame-${randomUUID()}.partial.${o.format}`);
   try {
     await new Promise((resolve, reject) => {
       if (signal.aborted) return reject(new Error('已取消'));
-      const child = spawn(binaryPaths().ffmpeg, buildArgs(job, o, temp), { windowsHide: true, shell: false });
+      const child = spawn(binaryPaths().ffmpeg, buildArgs(job, o, temp, runtime), { windowsHide: true, shell: false });
       let pending = ''; let error = '';
       const abort = () => child.kill();
       signal.addEventListener('abort', abort, { once: true });
