@@ -26,7 +26,8 @@ async function waitForState(page, predicate, timeout = 30000) {
     page.setDefaultTimeout(15000);
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
-    await page.getByRole('combobox', { name: '编码方案', exact: true }).selectOption('standard');
+    await page.getByRole('button', { name: '快速压缩', exact: true }).click();
+    await page.getByRole('combobox', { name: '视频编码', exact: true }).selectOption('h264');
     await page.waitForFunction(() => !!window.frame);
     console.log('Renderer ready');
     const ready = await page.evaluate(async () => (await window.frame.getState()).engineReady); assert.ok(ready);
@@ -51,7 +52,7 @@ async function waitForState(page, predicate, timeout = 30000) {
     await waitForState(page, state => state.outputDirectory === output);
     console.log('Output directory set');
     await page.screenshot({ path: path.join(root, '.test-artifacts/desktop-queue.png'), scale: 'css' });
-    await page.getByRole('button', { name: /开始压缩/ }).click();
+    await page.locator('.start-button').click();
     console.log('Compression started');
     const state = await waitForState(page, state => ['completed', 'failed', 'cancelled'].includes(state.jobs[0]?.status));
     console.log('Terminal state:', JSON.stringify({ status: state.jobs[0].status, error: state.jobs[0].error }));
@@ -71,7 +72,7 @@ async function waitForState(page, predicate, timeout = 30000) {
     await page.getByRole('button', { name: '清空', exact: true }).click();
     await page.getByRole('button', { name: '添加视频', exact: true }).click();
     await waitForState(page, state => !state.importing && state.jobs.length === 1);
-    await page.getByRole('button', { name: /开始压缩/ }).click();
+    await page.locator('.start-button').click();
     const cpuState = await waitForState(page, state => ['completed', 'failed', 'cancelled'].includes(state.jobs[0]?.status));
     assert.equal(cpuState.jobs[0].status, 'completed'); assert.equal(cpuState.jobs[0].encoder, 'cpu');
     let fallback = 'not applicable';
@@ -81,7 +82,7 @@ async function waitForState(page, predicate, timeout = 30000) {
       await app.evaluate(({ dialog }, input) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [input] }); }, tinyInput);
       await page.getByRole('button', { name: '添加视频', exact: true }).click();
       await waitForState(page, state => !state.importing && state.jobs.length === 1);
-      await page.getByRole('button', { name: /开始压缩/ }).click();
+      await page.locator('.start-button').click();
       const fallbackState = await waitForState(page, state => ['completed', 'failed', 'cancelled'].includes(state.jobs[0]?.status));
       assert.equal(fallbackState.jobs[0].status, 'completed'); assert.equal(fallbackState.jobs[0].encoder, 'cpu');
       assert.match(fallbackState.jobs[0].notice, /已改用 CPU/);

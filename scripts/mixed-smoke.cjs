@@ -27,7 +27,8 @@ async function waitForState(page, predicate, timeout = 60000) {
   try {
     const page = await app.firstWindow(); page.setDefaultTimeout(15000);
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
-    await page.getByRole('combobox', { name: '编码方案', exact: true }).selectOption('standard');
+    await page.getByRole('button', { name: '快速压缩', exact: true }).click();
+    await page.getByRole('combobox', { name: '视频编码', exact: true }).selectOption('h264');
     const detected = await waitForState(page, state => !state.hardware.detecting);
     const gpu = ['nvenc', 'qsv', 'amf'].find(id => detected.hardware.encoders.some(item => item.id === id && item.codecs.includes('h264')));
     if (!gpu) { console.log('Mixed integration skipped: no usable GPU encoder'); return; }
@@ -39,8 +40,9 @@ async function waitForState(page, predicate, timeout = 60000) {
     await page.locator('.directory-path').click();
     await waitForState(page, state => state.outputDirectory === output);
     await page.getByRole('switch', { name: 'CPU + 显卡混合并行', exact: true }).check();
+    await page.locator('.advanced-settings summary').click();
     await page.getByLabel('编码速度', { exact: true }).selectOption('slow');
-    await page.getByRole('button', { name: /开始压缩/ }).click();
+    await page.locator('.start-button').click();
     const running = await waitForState(page, state => state.jobs.filter(job => job.status === 'processing' && job.encoder).length === 2);
     assert.deepEqual(running.jobs.map(job => job.encoder).sort(), ['cpu', gpu].sort());
     await page.screenshot({ path: path.join(root, '.test-artifacts/desktop-mixed.png'), scale: 'css' });
@@ -53,7 +55,7 @@ async function waitForState(page, predicate, timeout = 60000) {
     await app.evaluate(({ dialog }, inputs) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: inputs }); }, [source, second, third]);
     await page.getByRole('button', { name: '添加视频', exact: true }).click();
     await waitForState(page, state => !state.importing && state.jobs.length === 3);
-    await page.getByRole('button', { name: /开始压缩/ }).click();
+    await page.locator('.start-button').click();
     await waitForState(page, state => state.jobs.filter(job => job.status === 'processing' && job.encoder).length === 2);
     await page.getByRole('button', { name: '取消压缩', exact: true }).click();
     const cancelled = await waitForState(page, state => !state.busy);

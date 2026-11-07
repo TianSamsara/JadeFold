@@ -30,7 +30,8 @@ async function waitForState(page, predicate, timeout = 180000) {
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
     await waitForState(page, state => !state.hardware.detecting);
-    assert.equal(await page.getByRole('combobox', { name: '编码方案', exact: true }).inputValue(), 'smart');
+    assert.equal(await page.getByRole('button', {name:'智能均衡',exact:true}).getAttribute('aria-pressed'), 'true');
+    await page.locator('.advanced-settings summary').click();
     assert.equal(await page.getByRole('combobox', { name: '智能编码兼容性' }).inputValue(), 'preserve');
     assert.equal(await page.getByRole('combobox', { name: '输出格式' }).inputValue(), 'mp4');
     await app.evaluate(({ dialog, shell }, payload) => {
@@ -41,7 +42,7 @@ async function waitForState(page, predicate, timeout = 180000) {
     await waitForState(page, state => !state.importing && state.jobs.length === 2);
     await page.locator('.directory-path').click();
     await waitForState(page, state => state.outputDirectory === output);
-    await page.getByRole('button', { name: /开始压缩/ }).click();
+    await page.locator('.start-button').click();
     const finished = await waitForState(page, state => !state.busy && state.jobs.every(job => ['completed', 'skipped', 'failed'].includes(job.status)));
     const [encoded, skipped] = finished.jobs;
     assert.equal(encoded.status, 'completed', encoded.error || JSON.stringify(encoded.smartAnalysis));
@@ -68,7 +69,7 @@ async function waitForState(page, predicate, timeout = 180000) {
     await page.getByRole('button', { name: '视频压缩', exact: false }).click();
     await page.getByRole('button', { name: `重新分析 ${compact.name}`, exact: true }).click();
     await waitForState(page, state => state.jobs[1].status === 'queued');
-    await page.getByRole('button', { name: /开始压缩/ }).click();
+    await page.locator('.start-button').click();
     await waitForState(page, state => state.busy && state.jobs[1].status === 'processing');
     await page.getByRole('button', { name: '取消压缩', exact: true }).click();
     const cancelled = await waitForState(page, state => !state.busy);

@@ -1,3 +1,4 @@
+import { selectMode } from './modes'
 import { Info } from 'lucide-react'
 import type { Job, Options } from './types'
 
@@ -10,7 +11,7 @@ export function TranscodeAdvice({ jobs, options, onChange, locked }: { jobs: Job
   if (!hevcToH264 && !oversizedTarget && !needsHEVC) return null
   const source = pending.find(job => job.codec === 'hevc') || pending[0]
   function limitSize() {
-    onChange({ ...options, encoder: 'cpu', parallel: false, rateControl: 'size', targetMB: Math.max(0.1, Math.floor(pending[0].size * 0.85 / 1024 / 1024 * 10) / 10) })
+    onChange({ ...selectMode(options, 'size'), targetMB: Math.max(0.1, Math.floor(pending[0].size * 0.85 / 1024 / 1024 * 10) / 10) })
   }
   return <section className={`transcode-advice ${hevcToH264 || oversizedTarget ? 'warning' : ''}`} role="note" aria-label="编码与体积提醒"><Info size={18} /><div>
     <strong>{hevcToH264 ? '原片已是 H.265，转为 H.264 可能变大' : oversizedTarget ? '目标体积大于或等于原片' : 'H.265 输出需要播放器支持 HEVC'}</strong>

@@ -1,6 +1,6 @@
 {
   "name": "baiyujing-ningying",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "JadeFold · 白玉京系列凝影阁本地视频压缩工具",
@@ -14,11 +14,12 @@
     "dev:web": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "start": "electron .",
-    "test": "node --test tests/engine.test.cjs tests/queue.test.cjs tests/quality.test.cjs tests/smart.test.cjs",
+    "test": "node --test tests/engine.test.cjs tests/queue.test.cjs tests/quality.test.cjs tests/smart.test.cjs tests/modes.test.cjs",
     "test:desktop": "node scripts/smoke.cjs",
     "test:mixed": "node scripts/mixed-smoke.cjs",
     "test:quality": "node scripts/quality-smoke.cjs",
     "test:diagnostics": "node scripts/diagnostic-smoke.cjs",
+    "test:modes": "node scripts/modes-smoke.cjs",
     "test:smart": "node scripts/smart-smoke.cjs",
     "benchmark": "node scripts/quality-benchmark.cjs",
     "dist": "pnpm build && electron-builder --win portable"

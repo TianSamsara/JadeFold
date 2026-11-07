@@ -1,74 +1,47 @@
-import type { CSSProperties } from 'react'
-import { Settings2, Info, Clapperboard, SlidersHorizontal, ArrowDownToLine } from 'lucide-react'
+import { Settings2, RotateCcw, Info, Cpu, ShieldCheck } from 'lucide-react'
 import type { Options, Encoder, Hardware } from './types'
-
-export const defaultOptions: Options = { codec: 'h265', format: 'mp4', resolution: 'original', crf: 24, speed: 'slow', audio: 'keep', encoder: 'cpu', parallel: false, strategy: 'smart', content: 'general', rateControl: 'quality', targetMB: 50, bitDepth: '10', audioKbps: 160, smartCodec: 'preserve' }
-
+import { modeOf, modes, selectMode, selectProfile, contentDefaults, actualEncoder } from './modes'
+export { defaultOptions } from './modes'
 const encoders: { id: Encoder; label: string }[] = [{ id: 'nvenc', label: 'NVIDIA NVENC' }, { id: 'qsv', label: 'Intel Quick Sync' }, { id: 'amf', label: 'AMD AMF' }]
-function recommend(content: Options['content']): Partial<Options> {
-  return content === 'screen' ? { codec: 'h264', bitDepth: '8', crf: 18, resolution: 'original' }
-    : { codec: 'h265', bitDepth: '10', crf: content === 'animation' ? 22 : 24, resolution: 'original' }
-}
-
 export function CompressionSettings({ options: o, onChange, locked, hardware }: { options: Options; onChange: (value: Options) => void; locked: boolean; hardware: Hardware }) {
   const patch = <K extends keyof Options>(key: K, value: Options[K]) => onChange({ ...o, [key]: value })
-  const available = (id: Encoder) => hardware.encoders.some(item => item.id === id && item.codecs.includes(o.codec))
-  const actual = o.encoder === 'auto' ? encoders.find(item => available(item.id))?.id || 'cpu' : o.encoder
+  const mode = modeOf(o); const smart = mode === 'smart'; const compatible = mode === 'compatible'; const size = mode === 'size'; const classic = o.strategy === 'maruko'
+  const gpu = mode === 'fast' || compatible; const actual = actualEncoder(o, hardware)
   const actualLabel = encoders.find(item => item.id === actual)?.label || 'CPU 软件编码'
-  const fixedCPU = o.strategy !== 'standard' || o.rateControl === 'size'
-  const unavailable = o.encoder !== 'auto' && o.encoder !== 'cpu' && !available(o.encoder)
-  const qualityValue = actual === 'cpu' || actual === 'nvenc' ? o.crf : Math.round(o.crf)
-  const qualityUnit = { auto: 'CRF', cpu: 'CRF', nvenc: 'CQ', qsv: 'ICQ', amf: 'QP' }[actual]
-  const values = o.strategy === 'standard' ? [21, 26, 31] : [20, 24, 28]
-  const presets = [{ name: '画质优先', desc: '保留更多画面细节', icon: Clapperboard }, { name: '均衡压缩', desc: '兼顾清晰度与文件大小', icon: SlidersHorizontal }, { name: '体积优先', desc: '方便传输与日常分享', icon: ArrowDownToLine }]
-  function strategy(value: Options['strategy']) {
-    if (value === 'smart') onChange({ ...o, strategy: value, encoder: 'cpu', parallel: false, rateControl: 'quality' })
-    else if (value === 'standard') onChange({ ...o, strategy: value, encoder: 'auto', codec: 'h264', bitDepth: '8', speed: 'medium', crf: 26, rateControl: 'quality', parallel: false })
-    else if (value === 'maruko') onChange({ ...o, strategy: value, encoder: 'cpu', codec: 'h264', bitDepth: '8', speed: 'veryslow', crf: 23.5, parallel: false })
-    else onChange({ ...o, ...recommend(o.content), strategy: value, encoder: 'cpu', speed: 'slow', parallel: false })
-  }
+  const available = (id: Encoder) => hardware.encoders.some(item => item.id === id && item.codecs.includes(o.codec))
+  const unit = actual === 'nvenc' ? 'CQ' : actual === 'qsv' ? 'ICQ' : actual === 'amf' ? 'QP' : 'CRF'
+  const values = o.content === 'screen' ? [18, 21, 24] : [20, 24, 28]
   return <aside className="settings-panel" aria-label="压缩设置">
-    <div className="settings-heading"><Settings2 size={18} /><h2>压缩设置</h2><span>应用于待处理视频</span></div>
+    <div className="settings-heading"><Settings2 size={18} aria-hidden="true" /><h2>本次搭配</h2><button className="icon-button" title="恢复当前模式推荐搭配" aria-label="恢复推荐搭配" disabled={locked} onClick={() => onChange(selectMode(o, mode))}><RotateCcw size={16} /></button></div>
+    <div className="output-plan" aria-label="输出方案摘要" aria-live="polite"><div><strong>{modes.find(m => m.id === mode)?.name}</strong><span>{smart ? '自动选参' : size ? '两遍编码' : '恒定画质'}</span></div><dl>
+      <div><dt>视频</dt><dd>{smart ? o.smartCodec === 'hevc' ? '允许 H.265' : 'H.264 / H.265 随原片' : `${o.codec === 'h265' ? 'H.265' : 'H.264'} / ${o.bitDepth}bit`}</dd></div>
+      <div><dt>画面</dt><dd>{smart || o.resolution === 'original' ? '原分辨率' : `最高 ${o.resolution}p`} · 原帧率</dd></div>
+      <div><dt>声音</dt><dd>{smart || o.audio === 'copy' ? '复制原音轨' : o.audio === 'mute' ? '移除声音' : `AAC ${o.audioKbps} kbps`}</dd></div>
+      <div><dt>执行</dt><dd>{hardware.detecting && gpu ? '检测显卡中…' : smart ? 'CPU 试压 + 编码' : actualLabel}{gpu && o.parallel && actual !== 'cpu' ? ' + CPU 并行' : ''}</dd></div>
+      <div><dt>体积</dt><dd>{smart ? '实际缩小 ≥ 5% 才导出' : size ? `每个文件约 ${Number.isFinite(o.targetMB) ? o.targetMB : '—'} MB` : '取决于画面与画质设置'}</dd></div>
+    </dl></div>
     <fieldset disabled={locked} className="settings-fieldset"><legend className="sr-only">视频压缩参数</legend>
-      <div className="quality-strategy">
-        <label className="form-label">编码方案<select aria-label="编码方案" value={o.strategy} onChange={e => strategy(e.target.value as Options['strategy'])}>
-          <option value="smart">智能均衡 · 自动试压选参</option><option value="efficient">精细压缩 · CPU</option><option value="maruko">小丸经典参考 · x264</option><option value="standard">快速 / 兼容转码 · 显卡优先</option>
-        </select></label>
-        <p className="field-hint">{o.strategy === 'smart' ? '读取原片编码和码率，用短片试压评分，再决定参数或保留原片。' : o.strategy === 'efficient' ? '用更多编码时间换取压缩效率；默认保留原始分辨率。' : o.strategy === 'maruko' ? '按公开旧版小丸源码参数配置；固定 H.264、8bit、veryslow。' : '优先速度与兼容性；默认 H.264，原片为 H.265 时可能更大。'}</p>
-        <label className="form-label">素材类型<select aria-label="素材类型" value={o.content} onChange={e => { const content = e.target.value as Options['content']; onChange({ ...o, content, ...(o.strategy === 'efficient' ? recommend(content) : {}) }) }}>
-          <option value="general">日常实拍 / 手机视频</option><option value="animation">动漫 / 二次元</option><option value="screen">录屏 / 教程文字</option>
-        </select></label>
-        <p className="field-hint">{o.content === 'screen' ? '精细方案优先原分辨率和低 CRF，避免小字模糊。' : o.content === 'animation' ? 'CPU 精细方案使用 animation 调优；小丸参考保留原参数。' : '保留原画面细节，不自动降帧或降噪。'}</p>
-      </div>
-
-      {o.strategy === 'smart' ? <div className="smart-settings">
-        <label className="form-label">编码兼容性<select aria-label="智能编码兼容性" value={o.smartCodec} onChange={e => patch('smartCodec', e.target.value as Options['smartCodec'])}><option value="preserve">H.264 / H.265 保持原类别 · 推荐</option><option value="hevc">允许升级 H.265 · 需 HEVC 播放器</option></select></label>
-        <label className="form-label spaced-field">输出格式<select aria-label="输出格式" value={o.format} onChange={e => patch('format', e.target.value as Options['format'])}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></label>
-        <div className="smart-rule"><strong>先看画质，再看体积</strong><p>短视频取一段，长视频取三段；使用 CPU 试压，保持原分辨率和帧率，复制原音轨。</p><p>抽样 VMAF ≥ 93，SSIM ≥ 0.97；录屏文字使用更严格的 SSIM 门槛。</p></div>
-        <div className="smart-rule"><strong>不生成越压越大的成品</strong><p>预计至少缩小 10% 才完整编码；完整结果实际缩小不足 5%，就保留原片。</p></div>
-        <p className="field-hint">智能分析比直接转码耗时。评分是抽样估计，不代表整片视觉无损或全局最优；无法安全选参时会跳过。</p>
-      </div> : <>
-      <div className="acceleration-setting"><label className="form-label">加速方式<select aria-label="加速方式" value={o.encoder} disabled={hardware.detecting || fixedCPU} onChange={e => onChange({ ...o, encoder: e.target.value as Encoder, bitDepth: '8' })}>
-        <option value="auto">自动选择 · 优先显卡</option>{encoders.map(item => <option key={item.id} value={item.id} disabled={!available(item.id)}>{item.label}{available(item.id) ? '' : ' · 不可用'}</option>)}<option value="cpu">CPU 软件编码</option>
-      </select></label><p className={`acceleration-status ${unavailable ? 'unavailable' : ''}`} role="status">{hardware.detecting ? '正在检测可用编码器…' : fixedCPU ? '当前方案使用 CPU，保证编码参数一致。' : unavailable ? '当前编码器不可用，请选择自动或 CPU。' : `当前：${actualLabel}`}</p>
-        {!fixedCPU && <><label className="audio-toggle mixed-toggle"><span><strong>CPU + 显卡混合并行</strong><small>批量时同时处理两个视频</small></span><input type="checkbox" role="switch" aria-label="CPU + 显卡混合并行" checked={o.parallel} disabled={actual === 'cpu' || hardware.detecting || unavailable} onChange={e => patch('parallel', e.target.checked)} /><span className="switch-track" aria-hidden="true" /></label><p className="mixed-hint">不同编码器输出的画质和体积可能不同。</p></>}
-      </div>
-
-      <div className="setting-block rate-settings"><label className="form-label">压缩模式<select aria-label="压缩模式" value={o.rateControl} onChange={e => onChange({ ...o, rateControl: e.target.value as Options['rateControl'], ...(e.target.value === 'size' ? { encoder: 'cpu' as const, parallel: false } : {}) })}>
-        <option value="quality">恒定画质 · CRF / CQ</option><option value="size">指定体积 · CPU 二遍编码</option>
-      </select></label>
-        {o.rateControl === 'size' ? <><label className="form-label target-size-label">每个视频的目标大小（MB）<input aria-label="目标大小 MB" type="number" min="0.1" max="102400" step="0.1" value={o.targetMB} onChange={e => patch('targetMB', Number(e.target.value))} /></label><p className="field-hint">先分析画面，再分配码率；预留音频与封装空间。目标为近似值，不是越小画质越好。</p></> : <><h3 className="preset-label">画质预设</h3><div className="presets">{presets.map((item, index) => <button key={item.name} className={`preset ${o.crf === values[index] ? 'selected' : ''}`} aria-pressed={o.crf === values[index]} onClick={() => patch('crf', values[index])}><item.icon size={19} /><span><strong>{item.name}</strong><small>{item.desc}</small></span><span className="radio-mark">{o.crf === values[index] && <span />}</span></button>)}</div><div className="quality-label"><label htmlFor="quality">画质系数</label><span>{qualityUnit} <strong>{qualityValue}</strong></span></div><input id="quality" className="quality-range" aria-label={`画质系数 ${qualityUnit}`} type="range" min="18" max="35" step={actual === 'cpu' || actual === 'nvenc' ? 0.5 : 1} value={qualityValue} onChange={e => patch('crf', Number(e.target.value))} style={{ '--range-fill': `${(o.crf - 18) / 17 * 100}%` } as CSSProperties} /><div className="range-labels"><span>更清晰</span><span>更小巧</span></div></>}
-      </div>
-
-      <div className="setting-block"><h3>视频参数</h3><div className="form-grid"><label>输出格式<select aria-label="输出格式" value={o.format} onChange={e => patch('format', e.target.value as Options['format'])}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></label><label>视频编码<select aria-label="视频编码" disabled={o.strategy === 'maruko'} value={o.codec} onChange={e => onChange({ ...o, codec: e.target.value as Options['codec'], bitDepth: '8' })}><option value="h264">H.264</option><option value="h265">H.265</option></select></label></div>
-        <label className="form-label spaced-field">色深<select aria-label="色深" value={o.bitDepth} disabled={o.codec !== 'h265' || o.encoder !== 'cpu' || o.strategy === 'maruko'} onChange={e => patch('bitDepth', e.target.value as Options['bitDepth'])}><option value="8">8bit · 兼容优先</option><option value="10">10bit · H.265 精细编码</option></select></label>
-        <label className="form-label spaced-field">分辨率<select aria-label="分辨率" value={o.resolution} onChange={e => patch('resolution', e.target.value as Options['resolution'])}><option value="original">保持原始分辨率</option><option value="1080">最高 1080p</option><option value="720">最高 720p</option><option value="480">最高 480p</option></select></label>
-        <label className="form-label spaced-field">编码速度<select aria-label="编码速度" value={o.speed} disabled={o.strategy === 'maruko'} onChange={e => patch('speed', e.target.value as Options['speed'])}><option value="fast">fast · 快速</option><option value="medium">medium · 均衡</option><option value="slow">slow · 精细</option><option value="slower">slower · 更精细</option><option value="veryslow">veryslow · 耗时更多</option></select></label>
-      </div>
-
-      <div className="setting-block extra-settings"><label className="form-label">音频处理<select aria-label="音频处理" value={o.audio} onChange={e => patch('audio', e.target.value as Options['audio'])}><option value="keep">AAC · 兼容输出</option><option value="copy">复制原音轨 · 避免二次压缩</option><option value="mute">移除音频</option></select></label>{o.audio === 'keep' && <label className="form-label spaced-field">音频码率<select aria-label="音频码率" value={o.audioKbps} onChange={e => patch('audioKbps', Number(e.target.value))}>{[64, 96, 128, 160, 192, 256, 320].map(value => <option key={value} value={value}>{value} kbps</option>)}</select></label>}<p className="field-hint">复制音轨需与输出容器兼容；10bit 编码不会恢复源文件已丢失的细节。</p></div>
+      {!compatible && <div className="setting-block"><label className="form-label">素材类型<select aria-label="素材类型" value={o.content} onChange={e => { const content = e.target.value as Options['content']; onChange({ ...o, content, ...(o.strategy === 'efficient' && !size ? contentDefaults(content) : {}) }) }}><option value="general">日常实拍 / 手机视频</option><option value="animation">动漫 / 二次元</option><option value="screen">录屏 / 教程文字</option></select></label><p className="field-hint">{o.content === 'screen' ? smart ? '提高文字细节的评分要求，保持原分辨率。' : '建议保持原分辨率，优先检查小字是否清晰。' : o.content === 'animation' ? classic ? '经典方案保留小丸参数，不额外叠加动漫调优。' : gpu ? '素材类型供画质预设参考；硬件编码不使用 CPU 动漫调优。' : 'CPU 编码启用动漫调优，关注线条和色带。' : '通用设置，不自动降噪或降低帧率。'}</p></div>}
+      {smart ? <>
+        <label className="form-label">编码选择<select aria-label="智能编码兼容性" value={o.smartCodec} onChange={e => patch('smartCodec', e.target.value as Options['smartCodec'])}><option value="preserve">保持 H.264 / H.265 原类别</option><option value="hevc">允许升级为 H.265</option></select></label>
+        <p className="field-hint">H.265 需要播放器支持 HEVC。解决原片播放问题，请选「兼容播放」。</p>
+        <div className="smart-policy"><ShieldCheck size={18} aria-hidden="true" /><div><strong>缩不动，就保留原片</strong><p>多点试压达标且预计缩小 ≥ 10% 才完整编码；实际缩小不足 5% 不导出。</p></div></div>
+        <details className="advanced-settings"><summary>分析规则与输出格式</summary><label className="form-label">输出格式<select aria-label="输出格式" value={o.format} onChange={e => patch('format', e.target.value as Options['format'])}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></label><p className="field-hint">短视频取一段，长视频取三段。抽样 VMAF ≥ 93、SSIM ≥ 0.97；录屏 SSIM ≥ 0.985。抽样不保证整片视觉无损。</p><p className="field-hint">HDR、多音轨、字幕等特殊素材会跳过；临时采样会占用磁盘空间。</p></details>
+      </> : <>
+        {size ? <div className="setting-block"><label className="form-label">每个视频的目标大小（MB）<input aria-label="目标大小 MB" type="number" min="0.1" max="102400" step="0.1" value={Number.isFinite(o.targetMB) ? o.targetMB : ''} onChange={e => patch('targetMB', e.target.value === '' ? NaN : Number(e.target.value))} aria-invalid={!Number.isFinite(o.targetMB) || o.targetMB < 0.1 || o.targetMB > 102400} /></label>{(!Number.isFinite(o.targetMB) || o.targetMB < 0.1 || o.targetMB > 102400) && <p className="inline-error" role="alert">请输入 0.1–102400 MB。</p>}<div className="size-shortcuts">{[25, 50, 100].map(n => <button key={n} aria-pressed={o.targetMB === n} onClick={() => patch('targetMB', n)}>{n} MB</button>)}</div><p className="field-hint">这是每个文件的目标，不是整个队列总量。1 MB = 1024² 字节；有严格上传上限时请留余量。</p></div> : <div className="setting-block"><h3>画质取舍</h3><div className="quality-segments">{['细节优先', '均衡', '更小体积'].map((label, i) => <button key={label} aria-pressed={o.crf === values[i]} onClick={() => patch('crf', values[i])}>{label}</button>)}</div><div className="quality-label"><label htmlFor="quality">画质系数</label><span>{unit} <strong>{actual === 'qsv' || actual === 'amf' ? Math.round(o.crf) : o.crf}</strong></span></div><input id="quality" type="range" className="quality-range" aria-label={`画质系数 ${unit}`} min="18" max="35" step={actual === 'cpu' || actual === 'nvenc' ? 0.5 : 1} value={o.crf} onChange={e => patch('crf', Number(e.target.value))} /><div className="range-labels"><span>细节更多</span><span>通常更小</span></div><p className="field-hint">数值越大通常越小，也会损失更多细节。不同编码器的数值不能直接比较。</p></div>}
+        {gpu ? <div className="setting-block"><label className="form-label">加速方式<select aria-label="加速方式" value={o.encoder} disabled={hardware.detecting} onChange={e => onChange({ ...o, encoder: e.target.value as Encoder, bitDepth: '8', parallel: e.target.value === 'cpu' ? false : o.parallel })}><option value="auto">自动选择 · 优先显卡</option>{encoders.map(e => <option key={e.id} value={e.id} disabled={!available(e.id)}>{e.label}{available(e.id) ? '' : '（不可用）'}</option>)}<option value="cpu">CPU 软件编码</option></select></label><p className="field-hint">{hardware.detecting ? '正在试编码检测硬件…' : `本次使用：${actualLabel}。自动选择失败时会回退 CPU。`}</p><label className="audio-toggle mixed-toggle"><span><strong>CPU + 显卡混合并行</strong><small>两个文件同时处理</small></span><input type="checkbox" role="switch" aria-label="CPU + 显卡混合并行" checked={o.parallel} disabled={actual === 'cpu' || hardware.detecting} onChange={e => patch('parallel', e.target.checked)} /><span className="switch-track" aria-hidden="true" /></label><p className="field-hint">需至少两个待处理文件；单个视频不会拆分。不同编码器的结果可能不同。</p></div> : <div className="cpu-note"><Cpu size={17} aria-hidden="true" /><p>{size ? '指定大小使用 CPU 两遍编码，不叠加显卡或混合并行。' : '精细压缩使用 CPU。优先速度时可切换「快速压缩」。'}</p></div>}
+        {!compatible && <div className="form-grid"><label>视频编码<select aria-label="视频编码" disabled={classic} value={o.codec} onChange={e => onChange({ ...o, codec: e.target.value as Options['codec'], bitDepth: '8', ...(gpu ? { encoder: o.encoder === 'cpu' ? 'cpu' : 'auto', parallel: false } : {}) })}><option value="h264">H.264 · 兼容广</option><option value="h265">H.265 · 需 HEVC 支持</option></select></label><label>输出格式<select aria-label="输出格式" value={o.format} onChange={e => patch('format', e.target.value as Options['format'])}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></label></div>}
+        {compatible && <div className="cpu-note"><Info size={17} aria-hidden="true" /><p>已固定 MP4 / H.264 / 8bit / AAC。可调整画质、加速与分辨率；转码不以缩小体积为保证。</p></div>}
+        <details className="advanced-settings" key={mode}><summary>高级设置{classic ? ' · 小丸经典参考' : ''}</summary>
+          {!gpu && <><label className="form-label">编码方案<select aria-label="编码方案" value={o.strategy} onChange={e => onChange(selectProfile(o, e.target.value as 'efficient' | 'maruko'))}><option value="efficient">精细方案 · 自定义</option><option value="maruko">小丸经典参考 · x264</option></select></label><p className="field-hint">小丸参考固定 H.264、8bit、veryslow；使用本程序内置 x264，不等同原小丸所有版本。</p></>}
+          {!compatible && <label className="form-label">色深<select aria-label="色深" value={o.bitDepth} disabled={o.codec !== 'h265' || actual !== 'cpu' || classic || gpu} onChange={e => patch('bitDepth', e.target.value as Options['bitDepth'])}><option value="8">8bit</option><option value="10">10bit · H.265 CPU</option></select></label>}
+          <label className="form-label">分辨率<select aria-label="分辨率" value={o.resolution} onChange={e => patch('resolution', e.target.value as Options['resolution'])}><option value="original">保持原始分辨率</option><option value="1080">最高 1080p</option><option value="720">最高 720p</option><option value="480">最高 480p</option></select></label>
+          <label className="form-label">编码速度<select aria-label="编码速度" disabled={classic} value={o.speed} onChange={e => patch('speed', e.target.value as Options['speed'])}>{['fast', 'medium', 'slow', 'slower', 'veryslow'].map(v => <option key={v} value={v}>{v}</option>)}</select></label>
+          {!compatible && <label className="form-label">音频处理<select aria-label="音频处理" value={o.audio} onChange={e => patch('audio', e.target.value as Options['audio'])}><option value="keep">AAC · 兼容输出</option><option value="copy">复制原音轨</option><option value="mute">移除声音</option></select></label>}
+          {o.audio === 'keep' && <label className="form-label">音频码率<select aria-label="音频码率" value={o.audioKbps} onChange={e => patch('audioKbps', Number(e.target.value))}>{[64, 96, 128, 160, 192, 256, 320].map(n => <option key={n} value={n}>{n} kbps</option>)}</select></label>}
+          <p className="field-hint">手动模式处理第一路视频与音频，字幕和其他音轨不保留。HDR 暂不做色调映射。10bit 不会恢复已丢失的细节。</p>
+        </details>
       </>}
     </fieldset>
-    <div className="settings-tip"><Info size={16} /><p>压缩看画质与体积的取舍。不同编码器的系数不可直接比较；二遍编码不保证比恒定画质更清晰。</p></div>
   </aside>
 }

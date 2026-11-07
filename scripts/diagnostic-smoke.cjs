@@ -24,7 +24,8 @@ async function waitForState(page, predicate) {
     const page = await app.firstWindow(); page.setDefaultTimeout(15000);
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
     await waitForState(page, state => !state.hardware.detecting);
-    await page.getByRole('combobox', { name: '编码方案', exact: true }).selectOption('standard');
+    await page.getByRole('button', { name: '快速压缩', exact: true }).click();
+    await page.getByRole('combobox', { name: '视频编码', exact: true }).selectOption('h264');
     await page.getByRole('combobox', { name: '加速方式', exact: true }).selectOption('cpu');
     await page.getByRole('slider').press('Home');
     const output = path.join(directory, 'output'); await fs.mkdir(output);
@@ -36,11 +37,13 @@ async function waitForState(page, predicate) {
     assert.equal(await budgetButton.count(), 1);
     if (await budgetButton.count()) {
       await budgetButton.click();
-      assert.equal(await page.getByRole('combobox', { name: '压缩模式', exact: true }).inputValue(), 'size');
-      await page.getByRole('combobox', { name: '压缩模式', exact: true }).selectOption('quality');
+      assert.equal(await page.getByRole('button', {name:'指定大小',exact:true}).getAttribute('aria-pressed'), 'true');
+      await page.getByRole('button', {name:'兼容播放',exact:true}).click();
+      await page.getByRole('combobox', { name: '加速方式', exact: true }).selectOption('cpu');
+      await page.getByRole('slider').press('Home');
     }
     await page.locator('.directory-path').click(); await waitForState(page, state => state.outputDirectory === output);
-    await page.getByRole('button', { name: /开始压缩/ }).click();
+    await page.locator('.start-button').click();
     const finished = await waitForState(page, state => !state.busy && state.jobs[0].status !== 'queued');
     const job = finished.jobs[0]; assert.equal(job.status, 'completed', job.error); assert.equal(job.compressionOutcome, 'expanded');
     assert.equal(job.codec, 'hevc'); assert.equal(job.outputCodec, 'h264'); assert.ok(job.videoBitrate > 0); assert.ok(job.outputVideoBitrate > job.videoBitrate);
