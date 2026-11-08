@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('frame', {
   retry: id => ipcRenderer.invoke('frame:retry', id),
   reveal: id => ipcRenderer.invoke('frame:reveal', id),
   openDirectory: () => ipcRenderer.invoke('frame:open-directory'),
+  removeHistory: id => ipcRenderer.invoke('frame:remove-history', id),
   clearHistory: () => ipcRenderer.invoke('frame:clear-history'),
   onState: callback => { const listener = (_event, state) => callback(state); ipcRenderer.on('frame:updated', listener); return () => ipcRenderer.removeListener('frame:updated', listener); }
 });

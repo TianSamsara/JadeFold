@@ -56,18 +56,20 @@ async function inspect(input) {
 
 function validateOptions(value) {
   const options = { codec: value?.codec, format: value?.format, resolution: value?.resolution, crf: Number(value?.crf), speed: value?.speed, audio: value?.audio, encoder: value?.encoder ?? 'cpu', parallel: value?.parallel ?? false,
-    strategy: value?.strategy ?? 'standard', content: value?.content ?? 'general', rateControl: value?.rateControl ?? 'quality', targetMB: Number(value?.targetMB ?? 50), bitDepth: value?.bitDepth ?? '8', audioKbps: Number(value?.audioKbps ?? 128), smartCodec: value?.smartCodec ?? 'preserve' };
+    strategy: value?.strategy ?? 'standard', content: value?.content ?? 'general', rateControl: value?.rateControl ?? 'quality', targetMB: Number(value?.targetMB ?? 50), bitDepth: value?.bitDepth ?? '8', audioKbps: Number(value?.audioKbps ?? 128), smartCodec: value?.smartCodec ?? 'preserve', qualityPreference: value?.qualityPreference ?? 'balanced' };
   if (!['h264', 'h265'].includes(options.codec) || !['mp4', 'mkv'].includes(options.format)
     || !['original', '1080', '720', '480'].includes(options.resolution)
     || !Number.isFinite(options.crf) || !Number.isInteger(options.crf * 2) || options.crf < 18 || options.crf > 35
     || !['fast', 'medium', 'slow', 'slower', 'veryslow'].includes(options.speed) || !['keep', 'mute', 'copy'].includes(options.audio)
     || !['auto', 'cpu', 'nvenc', 'qsv', 'amf'].includes(options.encoder) || typeof options.parallel !== 'boolean'
     || !['standard', 'efficient', 'maruko', 'smart', 'compatible'].includes(options.strategy) || !['general', 'animation', 'screen'].includes(options.content) || !['preserve', 'hevc'].includes(options.smartCodec)
+    || !['detail', 'balanced', 'smaller'].includes(options.qualityPreference)
     || !['quality', 'size'].includes(options.rateControl) || !Number.isFinite(options.targetMB) || options.targetMB < 0.1 || options.targetMB > 102400
     || !['8', '10'].includes(options.bitDepth) || ![64, 96, 128, 160, 192, 256, 320].includes(options.audioKbps)) {
     throw new Error('压缩设置无效，请重新选择预设。');
   }
-  if ((!['standard', 'compatible'].includes(options.strategy) || options.rateControl === 'size') && options.encoder !== 'cpu') throw new Error('精细压缩、小丸参考及二遍编码需要选择 CPU 编码。');
+  if ((options.strategy === 'maruko' || options.rateControl === 'size') && options.encoder !== 'cpu') throw new Error('指定大小和小丸经典需要使用 CPU。');
+  if (options.strategy === 'smart' && (options.parallel || options.rateControl !== 'quality')) throw new Error('自动压缩逐个分析视频，不支持同时处理两个文件或指定大小。');
   if (options.strategy === 'maruko' && (options.codec !== 'h264' || options.bitDepth !== '8' || options.speed !== 'veryslow')) throw new Error('小丸经典参考方案固定使用 H.264、8bit、veryslow。');
   if (options.bitDepth === '10' && (options.codec !== 'h265' || options.encoder !== 'cpu')) throw new Error('10bit 输出需要 H.265 CPU 编码。');
   if (options.strategy === 'compatible' && (options.codec !== 'h264' || options.format !== 'mp4' || options.bitDepth !== '8' || options.audio !== 'keep' || options.rateControl !== 'quality' || options.content !== 'general')) throw new Error('兼容播放固定使用 MP4、H.264、8bit、AAC 和通用画质模式。');

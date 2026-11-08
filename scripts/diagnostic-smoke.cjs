@@ -26,8 +26,8 @@ async function waitForState(page, predicate) {
     await waitForState(page, state => !state.hardware.detecting);
     await page.getByRole('button', { name: '快速压缩', exact: true }).click();
     await page.getByRole('combobox', { name: '视频编码', exact: true }).selectOption('h264');
-    await page.getByRole('combobox', { name: '加速方式', exact: true }).selectOption('cpu');
-    await page.getByRole('slider').press('Home');
+    await page.getByRole('button', { name: '使用 CPU', exact: true }).click();
+    await page.getByRole('slider').press('End');
     const output = path.join(directory, 'output'); await fs.mkdir(output);
     await app.evaluate(({ dialog }, payload) => { dialog.showOpenDialog = async (_win, options) => ({ canceled: false, filePaths: [options.properties.includes('openDirectory') ? payload.output : payload.input] }); }, { input, output });
     await page.getByRole('button', { name: '添加视频', exact: true }).click();
@@ -39,8 +39,8 @@ async function waitForState(page, predicate) {
       await budgetButton.click();
       assert.equal(await page.getByRole('button', {name:'指定大小',exact:true}).getAttribute('aria-pressed'), 'true');
       await page.getByRole('button', {name:'兼容播放',exact:true}).click();
-      await page.getByRole('combobox', { name: '加速方式', exact: true }).selectOption('cpu');
-      await page.getByRole('slider').press('Home');
+      await page.getByRole('button', { name: '使用 CPU', exact: true }).click();
+      await page.getByRole('slider').press('End');
     }
     await page.locator('.directory-path').click(); await waitForState(page, state => state.outputDirectory === output);
     await page.locator('.start-button').click();

@@ -68,7 +68,7 @@ async function waitForState(page, predicate, timeout = 30000) {
     const persisted = JSON.parse(await fs.readFile(path.join(data, 'history.json'), 'utf8'));
     assert.equal(persisted.history[0].output, state.jobs[0].output);
     await page.getByRole('button', { name: /^视频压缩/ }).click();
-    await page.getByRole('combobox', { name: '加速方式', exact: true }).selectOption('cpu');
+    await page.getByRole('button', { name: '使用 CPU', exact: true }).click();
     await page.getByRole('button', { name: '清空', exact: true }).click();
     await page.getByRole('button', { name: '添加视频', exact: true }).click();
     await waitForState(page, state => !state.importing && state.jobs.length === 1);
@@ -77,7 +77,7 @@ async function waitForState(page, predicate, timeout = 30000) {
     assert.equal(cpuState.jobs[0].status, 'completed'); assert.equal(cpuState.jobs[0].encoder, 'cpu');
     let fallback = 'not applicable';
     if (expectedEncoder === 'nvenc') {
-      await page.getByRole('combobox', { name: '加速方式', exact: true }).selectOption('auto');
+      await page.getByRole('button', { name: '使用显卡', exact: true }).click();
       await page.getByRole('button', { name: '清空', exact: true }).click();
       await app.evaluate(({ dialog }, input) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [input] }); }, tinyInput);
       await page.getByRole('button', { name: '添加视频', exact: true }).click();

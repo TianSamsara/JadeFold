@@ -22,6 +22,12 @@ async function saveHistory() {
   });
   return historyWrite;
 }
+async function editHistory(change) {
+  if (busy) throw new Error('请等当前任务完成后再删除记录。');
+  const previous = history; history = change(history);
+  try { await saveHistory(); } catch (error) { history = previous; throw error; }
+  emit(); return snapshot();
+}
 async function addFiles(paths) {
   if (busy || importing) throw new Error('当前正在处理文件，请稍后再添加。');
   if (!Array.isArray(paths) || paths.length > 200) throw new Error('每次最多添加 200 个视频。');
@@ -37,9 +43,9 @@ async function addFiles(paths) {
   return snapshot();
 }
 async function runQueue(options) {
-  const primary = resolveEncoder(options, hardware);
+  const primary = options.strategy === 'smart' ? options : resolveEncoder(options, hardware);
   const pending = jobs.filter(job => job.status === 'queued');
-  const mixed = options.parallel && primary.encoder !== 'cpu' && pending.length > 1;
+  const mixed = options.strategy !== 'smart' && options.parallel && primary.encoder !== 'cpu' && pending.length > 1;
   const lanes = mixed ? [primary, { ...primary, encoder: 'cpu' }] : [primary];
   const cpuThreads = Math.max(1, Math.min(8, Math.floor(os.availableParallelism() / 2)));
   const signal = controller.signal;
@@ -49,8 +55,14 @@ async function runQueue(options) {
       try {
         let effective = lane;
         const smart = options.strategy === 'smart';
+        const analyse = settings => planBalanced(job, settings, outputDirectory, analysis => { job.smartAnalysis = analysis; job.encoder = analysis.encoder; job.encoderLabel = analysis.encoderLabel; job.progress = analysis.progress; job.phaseLabel = analysis.phase; emit(); }, signal, { cpuThreads, hardware });
         if (smart) {
-          job.smartAnalysis = await planBalanced(job, options, outputDirectory, analysis => { job.smartAnalysis = analysis; job.progress = analysis.progress; job.phaseLabel = analysis.phase; emit(); }, signal, { cpuThreads });
+          job.smartAnalysis = await analyse(options);
+          if (job.smartAnalysis.decision === 'skip' && options.encoder === 'auto' && ['nvenc', 'qsv', 'amf'].includes(job.smartAnalysis.encoder)) {
+            job.smartAnalysis = await analyse({ ...options, encoder: 'cpu' });
+            job.smartAnalysis.notice = '显卡试压未找到合适结果，已重新用 CPU 试压评分。';
+          }
+          job.encoder = job.smartAnalysis.encoder; job.encoderLabel = job.smartAnalysis.encoderLabel; job.notice = job.smartAnalysis.notice || '';
           if (job.smartAnalysis.decision === 'skip') {
             job.status = 'skipped'; job.skipReason = job.smartAnalysis.reason; job.progress = 100; job.phaseLabel = '';
             history = history.filter(item => item.id !== job.id); history.unshift({ ...job }); history = history.slice(0, 100);
@@ -59,15 +71,24 @@ async function runQueue(options) {
           }
           effective = job.smartAnalysis.options;
         }
-        job.encoder = effective.encoder; job.encoderLabel = encoderNames[effective.encoder]; job.notice = ''; emit();
+        job.encoder = effective.encoder; job.encoderLabel = encoderNames[effective.encoder]; job.notice = job.smartAnalysis?.notice || ''; emit();
         const encode = () => compress(job, effective, outputDirectory, (progress, phase) => { job.progress = smart ? 15 + progress * 0.85 : progress; job.phaseLabel = phase; emit(); }, signal, smart ? { cpuThreads, preserveFrames: true, maxOutputBytes: Math.max(1, Math.floor(job.size * (1 - POLICY.actualSaving))) } : mixed ? { cpuThreads } : {});
         let result;
         try { result = await encode(); }
         catch (error) {
           if (options.encoder !== 'auto' || effective.encoder === 'cpu' || signal.aborted) throw error;
           job.notice = `${encoderNames[effective.encoder]} 处理此视频失败，已改用 CPU 编码。`;
-          effective = { ...effective, encoder: 'cpu' }; job.encoder = 'cpu'; job.encoderLabel = encoderNames.cpu; job.progress = 0; emit();
-          result = await encode();
+          if (smart) {
+            job.smartAnalysis = await analyse({ ...options, encoder: 'cpu' });
+            job.notice = '显卡完整编码失败，已重新用 CPU 试压评分。';
+            job.smartAnalysis.notice = job.notice; job.encoder = 'cpu'; job.encoderLabel = encoderNames.cpu; emit();
+            if (job.smartAnalysis.decision === 'skip') {
+              result = { skipped: true, skipReason: job.smartAnalysis.reason };
+            } else { effective = job.smartAnalysis.options; result = await encode(); }
+          } else {
+            effective = { ...effective, encoder: 'cpu' }; job.encoder = 'cpu'; job.encoderLabel = encoderNames.cpu; job.progress = 0; emit();
+            result = await encode();
+          }
         }
         Object.assign(job, result);
         job.status = result.skipped ? 'skipped' : 'completed'; job.progress = 100;
@@ -120,7 +141,7 @@ app.whenReady().then(async () => {
     if (!engineReady) throw new Error('视频引擎不可用，请重新安装应用。');
     const options = validateOptions(value);
     if (hardware.detecting) throw new Error('正在检测显卡编码能力，请稍候。');
-    resolveEncoder(options, hardware);
+    if (options.strategy !== 'smart') resolveEncoder(options, hardware);
     if (!jobs.some(job => job.status === 'queued')) throw new Error('请先添加视频，或重试未完成的任务。');
     busy = true; lastError = ''; controller = new AbortController(); emit();
     void runQueue(options);
@@ -139,7 +160,11 @@ app.whenReady().then(async () => {
   });
   handle('reveal', id => { const job = [...jobs, ...history].find(item => item.id === id && (item.output || item.status === 'skipped')); if (job) shell.showItemInFolder(job.output || job.path); });
   handle('open-directory', async () => { await fs.mkdir(outputDirectory, { recursive: true }); const error = await shell.openPath(outputDirectory); if (error) throw new Error(error); });
-  handle('clear-history', async () => { history = []; await saveHistory(); emit(); return snapshot(); });
+  handle('remove-history', async id => {
+    if (typeof id !== 'string') throw new Error('记录编号无效。');
+    return editHistory(items => items.filter(item => item.id !== id));
+  });
+  handle('clear-history', () => editHistory(() => []));
   if (process.env.FRAME_DEV_URL === 'http://127.0.0.1:5173') await window.loadURL(process.env.FRAME_DEV_URL);
   else await window.loadFile(path.join(__dirname, '../dist/index.html'));
   if (engineReady) {

@@ -16,8 +16,8 @@ async function waitForState(page, predicate, timeout = 180000) {
 }
 (async () => {
   await fs.mkdir(directory, { recursive: true });
-  const input = path.join(directory, '智能均衡-高码率.mp4');
-  const tight = path.join(directory, '智能均衡-紧凑HEVC.mp4');
+  const input = path.join(directory, '自动压缩-高码率.mp4');
+  const tight = path.join(directory, '自动压缩-紧凑HEVC.mp4');
   const output = path.join(directory, 'output'); await fs.mkdir(output);
   await engine.run(engine.binaryPaths().ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '18', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '0', '-c:a', 'aac', '-b:a', '128k', input]);
   await engine.run(engine.binaryPaths().ffmpeg, ['-v', 'error', '-i', input, '-t', '2', '-an', '-c:v', 'libx265', '-preset', 'fast', '-crf', '40', '-x265-params', 'pools=2:frame-threads=1', tight]);
@@ -30,7 +30,7 @@ async function waitForState(page, predicate, timeout = 180000) {
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
     await waitForState(page, state => !state.hardware.detecting);
-    assert.equal(await page.getByRole('button', {name:'智能均衡',exact:true}).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.getByRole('button', {name:'自动压缩',exact:true}).getAttribute('aria-pressed'), 'true');
     await page.locator('.advanced-settings summary').click();
     assert.equal(await page.getByRole('combobox', { name: '智能编码兼容性' }).inputValue(), 'preserve');
     assert.equal(await page.getByRole('combobox', { name: '输出格式' }).inputValue(), 'mp4');

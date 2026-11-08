@@ -35,4 +35,20 @@ test('legacy options keep intentional settings while repairing conflicting mode 
   const size = loadOptions(JSON.stringify({...old,rateControl:'size',parallel:true}));
   assert.equal(size.encoder,'cpu'); assert.equal(size.parallel,false); assert.equal(size.rateControl,'size'); assert.equal(size.strategy,'efficient');
   assert.deepEqual(loadOptions('{'),defaultOptions);
+  assert.equal(loadOptions(JSON.stringify({...old,speed:'veryslow'})).speed,'slow');
+});
+
+test('CPU and GPU choices persist in automatic and manual quality workflows', async () => {
+  const { selectMode, selectDevice, loadOptions, defaultOptions } = await api;
+  for (const mode of ['smart', 'quality', 'fast', 'compatible']) {
+    for (const encoder of ['cpu', 'auto', 'nvenc', 'qsv', 'amf']) {
+      const chosen = selectDevice(selectMode(defaultOptions, mode), encoder);
+      assert.doesNotThrow(() => validateOptions(chosen));
+      assert.equal(loadOptions(JSON.stringify(chosen)).encoder, encoder);
+      if (encoder !== 'cpu') assert.equal(chosen.bitDepth, '8');
+    }
+  }
+  assert.equal(selectDevice(selectMode(defaultOptions, 'size'), 'nvenc').encoder, 'cpu');
+  assert.throws(() => validateOptions({ ...defaultOptions, qualityPreference: 'unknown' }));
+  assert.throws(() => validateOptions({ ...defaultOptions, parallel: true }));
 });

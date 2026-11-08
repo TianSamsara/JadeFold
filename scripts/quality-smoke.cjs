@@ -23,8 +23,8 @@ async function waitForState(page, predicate) {
     await page.getByRole('heading', { name: '凝影阁', exact: true }).waitFor();
     await waitForState(page, state => !state.hardware.detecting);
     const scheme = page.getByRole('combobox', { name: '编码方案', exact: true });
-    assert.equal(await page.getByRole('button', {name:'智能均衡',exact:true}).getAttribute('aria-pressed'), 'true');
-    await page.getByRole('button', {name:'精细压缩',exact:true}).click();
+    assert.equal(await page.getByRole('button', {name:'自动压缩',exact:true}).getAttribute('aria-pressed'), 'true');
+    await page.getByRole('button', {name:'手动调画质',exact:true}).click();
     await page.locator('.advanced-settings summary').click();
     await page.getByRole('combobox', { name: '素材类型', exact: true }).selectOption('screen');
     assert.equal(await page.getByRole('combobox', { name: '视频编码', exact: true }).inputValue(), 'h264');

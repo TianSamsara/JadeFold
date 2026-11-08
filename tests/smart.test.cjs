@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const engine = require('../electron/engine.cjs');
-const { sampleWindows, chooseBalanced, measureQuality, planBalanced } = require('../electron/smart.cjs');
+const { sampleWindows, chooseBalanced, measureQuality, planBalanced, passesQuality } = require('../electron/smart.cjs');
 const directory = path.resolve(__dirname, '../.test-artifacts/smart');
 const options = { encoder: 'cpu', strategy: 'smart', codec: 'h264', bitDepth: '8', speed: 'slow', crf: 24, content: 'general', format: 'mp4', resolution: 'original', audio: 'keep', audioKbps: 128, parallel: false, rateControl: 'quality', targetMB: 50, smartCodec: 'preserve' };
 let source; let compact;
@@ -71,4 +71,43 @@ test('cancelling analysis stops the pipeline and removes sample files', async ()
   const control = new AbortController();
   await assert.rejects(planBalanced(source, options, directory, () => control.abort(), control.signal), /已取消/);
   assert.ok(!(await fs.readdir(directory)).some(name => name.startsWith('.jadefold-')));
+});
+
+test('detail preference raises the quality requirement without relaxing size protection', () => {
+  const metrics = [{ vmaf: 94, lowerTailVmaf: 86, ssim: 0.975 }];
+  assert.equal(passesQuality(metrics, 'general', 'detail'), false);
+  assert.equal(passesQuality(metrics, 'general', 'balanced'), true);
+  assert.equal(passesQuality(metrics, 'screen', 'balanced'), false);
+  assert.equal(passesQuality([{ vmaf: 91, lowerTailVmaf: 82, ssim: 0.965 }], 'general', 'smaller'), true);
+  for (const preference of ['detail', 'balanced', 'smaller']) {
+    assert.equal(chooseBalanced([{ verified: true, estimatedSize: 960, metrics: [{ vmaf: 100, lowerTailVmaf: 100, ssim: 1 }] }], {size:1000}, 'general', preference), null);
+  }
+});
+
+test('real available GPU encoders are scored before being used for full automatic output', async t => {
+  const hardware = await engine.detectHardware();
+  if (!hardware.encoders.some(e => e.codecs.length)) return t.skip('No hardware encoder available on this machine');
+  for (const encoder of hardware.encoders) {
+    for (const codec of encoder.codecs) {
+      const plan = await planBalanced(source, { ...options, encoder: encoder.id, smartCodec: codec === 'h265' ? 'hevc' : 'preserve', qualityPreference: 'detail' }, directory, () => {}, new AbortController().signal, { cpuThreads: 2, hardware });
+      assert.equal(plan.decision, 'encode', JSON.stringify(plan));
+      assert.equal(plan.options.encoder, encoder.id); assert.equal(plan.options.codec, codec);
+      assert.ok(plan.minVmaf >= 95 && plan.minSSIM >= 0.98);
+      const result = await engine.compress(source, plan.options, directory, () => {}, new AbortController().signal, { cpuThreads: 2, preserveFrames: true, maxOutputBytes: Math.floor(source.size * 0.95) });
+      assert.ok(result.output && !result.skipped); assert.equal(result.encoder, encoder.id);
+      assert.ok(result.outputSize <= source.size * 0.95);
+      const metadata = await engine.probeMedia(result.output, {countFrames:true});
+      assert.equal(metadata.frameCount, 48); assert.equal(metadata.width, source.width); assert.equal(metadata.height, source.height);
+      t.diagnostic(`${encoder.id}/${codec}: ${plan.minVmaf.toFixed(2)} VMAF, ${plan.minSSIM.toFixed(5)} SSIM, ${result.outputSize} bytes`);
+    }
+  }
+});
+
+test('automatic encoder resolves the source codec and explicit GPU never reduces 10bit depth silently', async () => {
+  const hardware = {encoders:[{id:'nvenc',codecs:['h264']}]};
+  const signal = new AbortController().signal;
+  const mismatch = await planBalanced(compact, {...options,encoder:'nvenc'}, directory, () => {}, signal, {hardware});
+  assert.equal(mismatch.decision, 'skip'); assert.equal(mismatch.candidates.length, 0);
+  const tenbit = await planBalanced({...source, codec:'hevc', pixelFormat:'yuv420p10le'}, {...options,encoder:'nvenc'}, directory, () => {}, signal, {hardware:{encoders:[{id:'nvenc',codecs:['h265']}]}});
+  assert.equal(tenbit.decision, 'skip'); assert.match(tenbit.reason, /10bit/); assert.equal(tenbit.candidates.length, 0);
 });
